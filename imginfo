@@ -1,0 +1,290 @@
+#!/opt/local/bin/perl5.34 -w
+
+use strict;
+use GD;
+
+sub decode_scanline {
+	my $pos = shift;
+	my $scanlinewidth = shift;
+	my $patternlength = shift;
+	my $img = shift;
+	my $planes = shift;
+	my $width = 0;
+	my $plane = '';
+
+	while ($width < $scanlinewidth) {
+		my ($byte0, $byte1) = unpack("x$pos" . "CC", $img);
+		if ($byte0 == 0x80) {
+			# bit string count $byte1, then that number literal bytes
+# 			print " [$pos] literal ($byte1)";
+			my $offset = $pos + 2;
+			my $literal = substr($img, $offset, $byte1);
+			$plane .= $literal;
+			$pos += 2 + $byte1;
+			$width += $byte1 * 8;
+		} elsif ($byte0 == 0x00) {
+			# pattern $byte1 times, length from header
+			my $offset = $pos + 2;
+			my $count = $byte1 * $patternlength;
+			my $pattern = substr($img, $offset, $patternlength);
+			$plane .= $pattern x $byte1;
+# 			print " [$pos] pattern ($count)";
+			$pos += 2 + $patternlength;
+			$width += $count * 8;
+		} else {
+			# solid run of black or white
+			my $count = $byte0 & 0x7f;
+# 			my $colour = $byte0 > 0x7f ? "black" : "white";
+			my $byte = $byte0 > 0x7f ? 0xFF : 0x00;
+			$plane .= pack("C", $byte) x $count;
+# 			print " [$pos] $colour ($count)";
+			$pos += 1;
+			$width += $count * 8;
+		}
+	}
+	push @{$planes}, $plane;
+# 	print " - total $width pixels\n";
+	return $pos;
+}
+
+sub read_palette {
+	my $palettekind = shift;
+	my $colours = shift;
+	my $image = shift;
+	my $img = shift;
+	my @palette;
+	
+	if ($palettekind eq "sttt") {
+		my $pos = 22;
+		foreach my $colour (0..$colours-1) {
+			my $rgb = unpack("x$pos n", $img);
+			my $r = (($rgb >> 8) && 0x0F) / 15.0;
+			my $g = (($rgb >> 4) && 0x0F) / 15.0;
+			my $b = (($rgb >> 0) && 0x0F) / 15.0;
+			$pos += 2;
+			push @palette, $image->colorAllocate($r * 255, $g * 255, $b * 255);
+		}
+	} elsif ($palettekind eq "ximg") {
+		my $pos = 22;
+		foreach my $colour (0..$colours-1) {
+			my ($r, $g, $b) = unpack("x$pos n n n", $img);
+			$r /= 1000.0;
+			$g /= 1000.0;
+			$b /= 1000.0;
+			$pos += 6;
+			push @palette, $image->colorAllocate($r * 255, $g * 255, $b * 255);
+		}
+	}
+	return @palette;
+}
+
+my $png = 0;
+if ($#ARGV >= 0 && $ARGV[0] =~ m{^-png}) {
+	shift @ARGV;
+	$png = 1;
+}
+
+foreach my $filename (@ARGV) {
+	$/ = undef;
+	open my $fh, '<', $filename or die;
+	my $img = <$fh>;
+	close $fh;
+
+	# Motorola format
+	my $header = "nnnnnnnn";
+	my ($version, $headerlength, $planes,
+		$patternlength,
+		$pixelwidth, $pixelheight,
+		$scanlinewidth, $scanlines) = unpack($header, $img);
+
+	print qq{
+File:\t\t$filename
+Version:\t$version
+Header length:\t$headerlength
+Planes:\t\t$planes
+Pattern length:\t$patternlength
+Pixel size:\t$pixelwidth x $pixelheight microns
+Image size:\t$scanlinewidth x $scanlines
+};
+
+	my @palette;
+	my $palettekind;
+	if ($headerlength > 8 && ($planes == 2 || $planes == 4 || $planes == 8)) {
+		my ($identifier1, $identifier2) = unpack("x16 n n", $img);
+		if ($identifier1 == 0x5849 && $identifier2 == 0x4d47) {
+			$palettekind = "ximg";
+			my $ximgformat = unpack("x20 n", $img);
+			print qq{Palette:\tXIMG
+Color format:\t$ximgformat
+};
+		} elsif ($identifier1 == 0x5354 && $identifier2 == 0x5454) {
+			$palettekind = "sttt";
+			print qq{Palette:\tSTTT
+};		
+		} elsif ($identifier1 == 0x0080 && ($headerlength %2) == 1) {
+			$palettekind = "hyperpaint";
+			print qq{Palette:\tHyperPaint
+};
+		} else {
+			my $size = $headerlength - 8;
+			if ($planes == 4 && $size == 16) {
+				$palettekind = "xbios";
+				print qq{Palette:\tRaw XBIOS\n};
+			} elsif ($planes == 8 && $size == 256) {
+				$palettekind = "xbios";
+				print qq{Palette:\tRaw XBIOS\n};
+			} elsif ($planes == 4 && $size == 48) {
+				$palettekind = "vdi";
+				print qq{Palette:\tRaw VDI\n}
+			} elsif ($planes == 8 && $size == 768) {
+				$palettekind = "vdi";
+				print qq{Palette:\tRaw VDI\n}
+			} else {
+				$palettekind = "unknown";
+				print qq{Palette:\tUnknown\n};
+			}
+		}
+	}
+	next unless $png;
+
+	my $image = GD::Image->new($scanlinewidth, $scanlines);
+	my $white = $image->colorAllocate(255, 255, 255);
+	my $black = $image->colorAllocate(0, 0, 0);
+	$image->filledRectangle(0, 0, $scanlinewidth - 1, $scanlines - 1, $white);
+
+	if ($planes == 1) {
+		my $pos = $headerlength * 2;
+		my $scanline = 0;
+		my $repeat = 1;
+		while ($scanline < $scanlines) {
+# 			print "Reading scanline $scanline from $pos: ";
+			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
+			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
+				# replication count byte
+				my $offset = $pos + 3;
+				$repeat = unpack("x$offset C", $img);
+# 				print " repeat x$repeat";
+				$pos += 4;
+				next;
+			}
+			my @planes;
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			for my $repeatcount (1..$repeat) {
+				my $byte = 0;
+				my $mask = 0x80;
+				for my $x (0..$scanlinewidth-1) {
+					if (unpack("x$byte C", $planes[0]) & 0x80) {
+						$image->setPixel($x, $scanline, $black);
+					}
+					$mask >>= 1;
+					if ($mask == 0) {
+						$mask = 0x80;
+						$byte++;
+					}
+				}
+				$scanline++;
+			}
+			$repeat = 1;
+		}
+	} elsif ($planes == 4) {
+		my @palette = read_palette($palettekind, 2 ** $planes, $image, $img);
+		my $pos = $headerlength * 2;
+		my $scanline = 0;
+		my $repeat = 1;
+		while ($scanline < $scanlines) {
+# 			print "Reading scanline $scanline from $pos: ";
+			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
+			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
+				# replication count byte
+				my $offset = $pos + 3;
+				$repeat = unpack("x$offset C", $img);
+# 				print " repeat x$repeat";
+				$pos += 4;
+				next;
+			}
+			my @planes;
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+
+			for my $repeatcount (1..$repeat) {
+				my $byte = 0;
+				my $mask = 0x80;
+				for my $x (0..$scanlinewidth-1) {
+					my $colour = 0;
+					$colour += 0x08 if unpack("x$byte C", $planes[3]) & $mask;
+					$colour += 0x04 if unpack("x$byte C", $planes[2]) & $mask;
+					$colour += 0x02 if unpack("x$byte C", $planes[1]) & $mask;
+					$colour += 0x01 if unpack("x$byte C", $planes[0]) & $mask;
+					$image->setPixel($x, $scanline, $palette[$colour]);
+					$mask >>= 1;
+					if ($mask == 0) {
+						$mask = 0x80;
+						$byte++;
+					}
+				}
+				$scanline++;
+			}
+			$repeat = 1;
+		}
+	
+	} elsif ($planes == 8) {
+		my @palette = read_palette($palettekind, 2 ** $planes, $image, $img);
+		my $pos = $headerlength * 2;
+		my $scanline = 0;
+		my $repeat = 1;
+		while ($scanline < $scanlines) {
+# 			print "Reading scanline $scanline from $pos: ";
+			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
+			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
+				# replication count byte
+				my $offset = $pos + 3;
+				$repeat = unpack("x$offset C", $img);
+# 				print " repeat x$repeat";
+				$pos += 4;
+				next;
+			}
+			my @planes;
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+
+			for my $repeatcount (1..$repeat) {
+				my $byte = 0;
+				my $mask = 0x80;
+				for my $x (0..$scanlinewidth-1) {
+					my $colour = 0;
+					$colour += 0x80 if unpack("x$byte C", $planes[7]) & $mask;
+					$colour += 0x40 if unpack("x$byte C", $planes[6]) & $mask;
+					$colour += 0x20 if unpack("x$byte C", $planes[5]) & $mask;
+					$colour += 0x10 if unpack("x$byte C", $planes[4]) & $mask;
+					$colour += 0x08 if unpack("x$byte C", $planes[3]) & $mask;
+					$colour += 0x04 if unpack("x$byte C", $planes[2]) & $mask;
+					$colour += 0x02 if unpack("x$byte C", $planes[1]) & $mask;
+					$colour += 0x01 if unpack("x$byte C", $planes[0]) & $mask;
+					$image->setPixel($x, $scanline, $palette[$colour]);
+					$mask >>= 1;
+					if ($mask == 0) {
+						$mask = 0x80;
+						$byte++;
+					}
+				}
+				$scanline++;
+			}
+			$repeat = 1;
+		}
+	
+	}
+	my $png_file = $filename;
+	$png_file =~ s/\.IMG$/\.png/i;
+	my $FH = IO::File->new( ">$png_file" ) || die "Error opening file for write: '$png_file'";
+	binmode $FH;
+	print $FH $image->png;
+	close $FH;
+}

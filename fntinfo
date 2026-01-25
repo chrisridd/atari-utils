@@ -1,0 +1,91 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+my $bitmaps = 0;
+if ($#ARGV >= 0 && $ARGV[0] =~ m{^-bitmap}) {
+	shift @ARGV;
+	$bitmaps = 1;
+}
+
+foreach my $filename (@ARGV) {
+	$/ = undef;
+	open my $fh, '<', $filename or die;
+	my $font = <$fh>;
+	close $fh;
+
+	my $flagcheck = unpack("x66v", $font);
+	my $header;
+	my $word;
+	# Check if the bit is set in either byte
+	if ($flagcheck & 0x0404) {
+		# Motorola format
+		$header = "nnA32" . "nn" . "nnnnn" . "nn" . "nn" . "nn" . "nn" . "n" . "NN" . "Nnn";
+		$word = "n";
+	} else {
+		# Intel format
+		$header = "vvA32" . "vv" . "vvvvv" . "vv" . "vv" . "vv" . "vv" . "v" . "VV" . "Vvv";
+		$word = "v";
+	}
+	my ($fontid,$size,$name,
+		$first,$last,
+		$top,$ascent,$half,$descent,$bottom,
+		$maxcharw,$maxcellw,
+		$leftoff,$rightoff,
+		$thicken,$ulsize,
+		$lighten,$skew,
+		$flags,
+		$hortable,$chartable,
+		$formtable,$formw,$formh) = unpack($header, $font);
+	my $lightenmask = sprintf("0x%04x", $lighten);
+	my $skewmask = sprintf("0x%04x", $skew);
+	my @flags;
+	push @flags, "System" if $flags & 0x01;
+	push @flags, "Horizontal offsets" if $flags & 0x02;
+	push @flags, "No horizontal offsets" unless $flags & 0x02;
+	push @flags, "Motorola" if $flags & 0x04;
+	push @flags, "Intel" unless $flags & 0x04;
+	push @flags, "Monospaced" if $flags & 0x08;
+	my $flagvalue = sprintf("0x%04x (", $flags) . join(",", @flags) . ")";
+	my $hoffset = sprintf("0x%04x", $hortable);
+	my $coffset = sprintf("0x%04x", $chartable);
+	my $foffset = sprintf("0x%04x", $formtable);
+	print qq{
+Filename:\t\t$filename
+Font ID:\t\t$fontid
+Font size:\t\t$size points
+Font name:\t\t$name
+Char range:\t\t$first..$last
+Vertical offsets:\t$top,$ascent,$half,$descent,$bottom
+Max width:\t\t$maxcharw,$maxcellw
+Left/right offsets:\t$leftoff,$rightoff
+Thickening:\t\t$thicken pixels
+Underline:\t\t$ulsize pixels
+Lighten mask:\t\t$lightenmask
+Skew mask:\t\t$skewmask
+Flags:\t\t\t$flagvalue
+Horizontal offsets:\t$hoffset
+Character offsets:\t$coffset
+Form offset:\t\t$foffset
+Form size:\t\t$formw bytes x $formh lines
+};
+	if ($bitmaps) {
+		my @offsets = unpack("x$chartable" . $word . ($last - $first + 2), $font);
+		my $marks = ' ' x ($offsets[-1] * 8);
+		foreach my $offset (@offsets) {
+			substr($marks, $offset, 1, "x");
+		}
+		print "$marks\n";
+		foreach my $i (0..$formh - 1) {
+			my $start = 'x' x ($formtable + $i * $formw);
+			my (@w) = unpack($start . "n" x ($formw / 2), $font); # Always big endian?
+			my $row = '';
+			foreach my $data (@w) {
+				printf "%016b", $data;
+			}
+			print "\n";
+		}
+		print "$marks\n";
+	}
+}

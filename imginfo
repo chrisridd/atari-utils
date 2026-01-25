@@ -1,7 +1,6 @@
 #!/opt/local/bin/perl5.34 -w
 
 use strict;
-use GD;
 
 sub decode_scanline {
 	my $pos = shift;
@@ -80,6 +79,8 @@ sub read_palette {
 
 my $png = 0;
 if ($#ARGV >= 0 && $ARGV[0] =~ m{^-png}) {
+	eval { require GD }
+		or die "Cannot generate PNG files as there is no GD module installed\n";
 	shift @ARGV;
 	$png = 1;
 }

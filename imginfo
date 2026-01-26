@@ -149,11 +149,15 @@ Color format:\t$ximgformat
 	next unless $png;
 
 	my $image = GD::Image->new($scanlinewidth, $scanlines);
-	my $white = $image->colorAllocate(255, 255, 255);
-	my $black = $image->colorAllocate(0, 0, 0);
-	$image->filledRectangle(0, 0, $scanlinewidth - 1, $scanlines - 1, $white);
+# 	my $white = $image->colorAllocate(255, 255, 255);
+# 	my $black = $image->colorAllocate(0, 0, 0);
+# 	$image->filledRectangle(0, 0, $scanlinewidth - 1, $scanlines - 1, $white);
 
 	if ($planes == 1) {
+		@palette = (
+			$image->colorAllocate(255, 255, 255),
+			$image->colorAllocate(0, 0, 0)
+		);
 		my $pos = $headerlength * 2;
 		my $scanline = 0;
 		my $repeat = 1;
@@ -174,9 +178,9 @@ Color format:\t$ximgformat
 				my $byte = 0;
 				my $mask = 0x80;
 				for my $x (0..$scanlinewidth-1) {
-					if (unpack("x$byte C", $planes[0]) & 0x80) {
-						$image->setPixel($x, $scanline, $black);
-					}
+					my $colour = 0;
+					$colour += 0x01 if unpack("x$byte C", $planes[0]) & $mask;
+					$image->setPixel($x, $scanline, $palette[$colour]);
 					$mask >>= 1;
 					if ($mask == 0) {
 						$mask = 0x80;

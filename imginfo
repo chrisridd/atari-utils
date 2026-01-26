@@ -73,6 +73,21 @@ sub read_palette {
 			$pos += 6;
 			push @palette, $image->colorAllocate($r * 255, $g * 255, $b * 255);
 		}
+	} elsif ($palettekind eq "hyperpaint") {
+		my $pos = 22;
+		foreach my $colour (0..$colours-1) {
+			# STe values ie 0000 3214 3214 3214
+			my $rgb = unpack("x$pos n", $img);
+			my $bit4s = $rgb & 0x0111; # 0000 0001 0001 0001
+			$rgb &= 0x0eee; # Remove bottom bits
+			$rgb >>= 1; # Now 0000 0321 0321 0321
+			$rgb |= ($topbits << 3); # Now 0000 4321 4321 4321
+			my $r = (($rgb >> 8) && 0x0F) / 15.0;
+			my $g = (($rgb >> 4) && 0x0F) / 15.0;
+			my $b = (($rgb >> 0) && 0x0F) / 15.0;
+			$pos += 2;
+			push @palette, $image->colorAllocate($r * 255, $g * 255, $b * 255);
+		}
 	}
 	return @palette;
 }
@@ -149,9 +164,6 @@ Color format:\t$ximgformat
 	next unless $png;
 
 	my $image = GD::Image->new($scanlinewidth, $scanlines);
-# 	my $white = $image->colorAllocate(255, 255, 255);
-# 	my $black = $image->colorAllocate(0, 0, 0);
-# 	$image->filledRectangle(0, 0, $scanlinewidth - 1, $scanlines - 1, $white);
 
 	if ($planes == 1) {
 		@palette = (
@@ -213,6 +225,9 @@ Color format:\t$ximgformat
 			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
 			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
 
+			if ($palettekind eq "hyperpaint") {
+				@planes = reverse @planes;
+			}
 			for my $repeatcount (1..$repeat) {
 				my $byte = 0;
 				my $mask = 0x80;

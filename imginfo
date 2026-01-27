@@ -52,7 +52,14 @@ sub read_palette {
 	my $image = shift;
 	my $img = shift;
 	my @palette;
-	
+
+# Special case for mono - pretend there's a palette of white and black
+	if ($colours == 2) {
+		return (
+			$image->colorAllocate(255, 255, 255),
+			$image->colorAllocate(0, 0, 0)
+		);
+	}
 	if ($palettekind eq "sttt") {
 		my $pos = 22;
 		foreach my $colour (0..$colours-1) {
@@ -81,7 +88,7 @@ sub read_palette {
 			my $bit4s = $rgb & 0x0111; # 0000 0001 0001 0001
 			$rgb &= 0x0eee; # Remove bottom bits
 			$rgb >>= 1; # Now 0000 0321 0321 0321
-			$rgb |= ($topbits << 3); # Now 0000 4321 4321 4321
+			$rgb |= ($bit4s << 3); # Now 0000 4321 4321 4321
 			my $r = (($rgb >> 8) && 0x0F) / 15.0;
 			my $g = (($rgb >> 4) && 0x0F) / 15.0;
 			my $b = (($rgb >> 0) && 0x0F) / 15.0;
@@ -123,7 +130,6 @@ Pixel size:\t$pixelwidth x $pixelheight microns
 Image size:\t$scanlinewidth x $scanlines
 };
 
-	my @palette;
 	my $palettekind;
 	if ($headerlength > 8 && ($planes == 2 || $planes == 4 || $planes == 8)) {
 		my ($identifier1, $identifier2) = unpack("x16 n n", $img);
@@ -166,10 +172,7 @@ Color format:\t$ximgformat
 	my $image = GD::Image->new($scanlinewidth, $scanlines);
 
 	if ($planes == 1) {
-		@palette = (
-			$image->colorAllocate(255, 255, 255),
-			$image->colorAllocate(0, 0, 0)
-		);
+		my @palette = read_palette($palettekind, 2 ** $planes, $image, $img);
 		my $pos = $headerlength * 2;
 		my $scanline = 0;
 		my $repeat = 1;
@@ -185,7 +188,9 @@ Color format:\t$ximgformat
 				next;
 			}
 			my @planes;
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			for my $plane (1..$planes) {
+				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			}
 			for my $repeatcount (1..$repeat) {
 				my $byte = 0;
 				my $mask = 0x80;
@@ -220,10 +225,9 @@ Color format:\t$ximgformat
 				next;
 			}
 			my @planes;
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			for my $plane (1..$planes) {
+				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			}
 
 			if ($palettekind eq "hyperpaint") {
 				@planes = reverse @planes;
@@ -266,14 +270,9 @@ Color format:\t$ximgformat
 				next;
 			}
 			my @planes;
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
-			$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			for my $plane (1..$planes) {
+				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
+			}
 
 			for my $repeatcount (1..$repeat) {
 				my $byte = 0;

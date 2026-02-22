@@ -1,103 +1,462 @@
-#!/opt/local/bin/perl5.34 -w
+#!/usr/bin/env perl -w
 
 use strict;
 use warnings;
 use GD;
 
-die "Usage: $0 png-file\n" unless $#ARGV == 0;
-my $filename = shift;
-my $image = GD::Image->newFromPng($filename, 1) or die;
+# Reasonably complex class because it supports matching colours in a way that matches
+# human visual perception. It can also mix two colours together in an optimal way (not
+# used in this script though.)
+package Colour;
 
-my ($width, $height) = $image->getBounds();
-my $extraBits = "0" x ($width % 8);
-my %palette;
-for my $y (0..$height-1) {
-	for my $x (0..$width-1) {
-		my $rgb = $image->getPixel($x, $y);
-		$palette{$rgb} = 1;
-	}
-}
-my @palette;
-my $index = 0;
-for my $k (keys %palette) {
-	$palette[$index] = $k;
-	$palette{$k} = $index;
-	$index++;
-}
-
-$filename =~ s/\.png$/.img/;
-open IMG, ">", $filename or die;
-my $header = pack("nnnnnnnn",
-	1, #version
-	779, #header size
-	8, #planes
-	2, #pattern length
-	372, 372, # microns
-	$width, $height);
-print IMG $header;
-print IMG "XIMG";
-print IMG pack("n", 0x00);
-for my $i (0..255) {
-	if (exists $palette[$i]) {
-		use integer;
-		my $r = ($palette[$i] >> 16) & 0xFF;
-		my $g = ($palette[$i] >> 8) & 0xFF;
-		my $b = ($palette[$i] >> 0) & 0xFF;
-		my $vdir = ($r * 1000) / 255;
-		my $vdig = ($g * 1000) / 255;
-		my $vdib = ($b * 1000) / 255;
-		printf("%02x%02x%02x => ($vdir, $vdig, $vdib)\n", $r, $g, $b);
-		print IMG pack("nnn", $vdir, $vdig, $vdib);
-	} else {
-		print IMG pack("nnn", 1000, 1000, 1000);
-	}
-}
-
-for my $y (0..$height-1) {
-	my @planes;
-	for my $x (0..$width-1) {
-		my $rgb = $image->getPixel($x, $y);
-		my $index = $palette{$rgb};
-		# Don't care about the actual RGB value yet
-#		my ($r, $g, $b) = $image->rgb($index);
-		$planes[7] .= ($index & 0x80) ? "1" : "0";
-		$planes[6] .= ($index & 0x40) ? "1" : "0";
-		$planes[5] .= ($index & 0x20) ? "1" : "0";
-		$planes[4] .= ($index & 0x10) ? "1" : "0";
-		$planes[3] .= ($index & 0x08) ? "1" : "0";
-		$planes[2] .= ($index & 0x04) ? "1" : "0";
-		$planes[1] .= ($index & 0x02) ? "1" : "0";
-		$planes[0] .= ($index & 0x01) ? "1" : "0";
-	}
-	# Each plane must be an even number of bytes
-	$planes[0] .= $extraBits;
-	$planes[1] .= $extraBits;
-	$planes[2] .= $extraBits;
-	$planes[3] .= $extraBits;
-	$planes[4] .= $extraBits;
-	$planes[5] .= $extraBits;
-	$planes[6] .= $extraBits;
-	$planes[7] .= $extraBits;
-	my $bytesPerLine = length($planes[0]) / 8; # Should all be the same!
-	for my $plane (@planes) {
-		my $pos = 0;
-		my $bytes;
-		while ($pos < length($plane)) {
-			my $byte = 0;
-			$byte |= 0x80 if substr($plane, $pos + 0, 1) eq "1";
-			$byte |= 0x40 if substr($plane, $pos + 1, 1) eq "1";
-			$byte |= 0x20 if substr($plane, $pos + 2, 1) eq "1";
-			$byte |= 0x10 if substr($plane, $pos + 3, 1) eq "1";
-			$byte |= 0x08 if substr($plane, $pos + 4, 1) eq "1";
-			$byte |= 0x04 if substr($plane, $pos + 5, 1) eq "1";
-			$byte |= 0x02 if substr($plane, $pos + 6, 1) eq "1";
-			$byte |= 0x01 if substr($plane, $pos + 7, 1) eq "1";
-			$bytes .= pack("C", $byte);
-			$pos += 8;
+sub new {
+	my ($class, %args) = @_;
+	my %rgb;
+	if (exists($args{"rgb"})) {
+		if ($args{"rgb"} =~ m{^(..)(..)(..)$}) {
+			$args{"r"} = hex($1);
+			$args{"g"} = hex($2);
+			$args{"b"} = hex($3);
+			delete $args{"rgb"};
 		}
-		print IMG pack("CC", 0x80, length($bytes)); # literal bit string
-		print IMG $bytes;
+	}
+	die "rgb value needs either rgb key or r, g, and b keys\n" unless
+		exists($args{"r"}) &&
+		exists($args{"g"}) &&
+		exists($args{"b"});
+	$rgb{"r"} = $args{"r"};
+	$rgb{"g"} = $args{"g"};
+	$rgb{"b"} = $args{"b"};
+	$args{"RGB"} = \%rgb;
+	delete $args{"r"};
+	delete $args{"g"};
+	delete $args{"b"};
+
+	my %xyz = rgbToXyz($rgb{"r"}, $rgb{"g"}, $rgb{"b"});
+	$args{"XYZ"} = \%xyz;
+
+	my %lab = xyzToLab($xyz{"x"}, $xyz{"y"}, $xyz{"z"});
+	$args{"Lab"} = \%lab;
+
+	return bless { %args }, $class;
+}
+
+sub rgbhex {
+	my $self = shift;
+	return sprintf("%02x%02x%02x", $self->{"RGB"}->{"r"}, $self->{"RGB"}->{"g"}, $self->{"RGB"}->{"b"});
+}
+
+sub vdi {
+	my $self = shift;
+	use integer;
+
+	my $vdir = ($self->{"RGB"}->{"r"} * 1000) / 255;
+	my $vdig = ($self->{"RGB"}->{"g"} * 1000) / 255;
+	my $vdib = ($self->{"RGB"}->{"b"} * 1000) / 255;
+	return ($vdir, $vdig, $vdib);
+}
+
+sub srgbToLinear {
+	my $c = shift;
+    if ($c <= 0.04045) {
+        return $c / 12.92;
+    } else {
+        return (($c + 0.055) / 1.055) ** 2.4;
+    }
+}
+
+sub rgbToXyz {
+    my $r = srgbToLinear(shift);
+    my $g = srgbToLinear(shift);
+    my $b = srgbToLinear(shift);
+
+	my %xyz;
+	$xyz{"x"} = $r * 0.4124564 + $g * 0.3575761 + $b * 0.1804375;
+    $xyz{"y"} = $r * 0.2126729 + $g * 0.7151522 + $b * 0.0721750;
+    $xyz{"z"} = $r * 0.0193339 + $g * 0.1191920 + $b * 0.9503041;
+
+    return %xyz;
+}
+
+sub linearToSrgb {
+	my $c = shift;
+    if ($c <= 0.0031308) {
+        return 12.92 * $c;
+    } else {
+        return 1.055 * $c ** (1.0 / 2.4) - 0.055;
+    }
+}
+
+sub clamp {
+	my $v = shift;
+	$v = (255 < $v) ? 255 : $v;
+	$v = (0 > $v) ? 0 : $v;
+	return $v;
+}
+
+sub xyzToRgb {
+	my $x = shift;
+	my $y = shift;
+	my $z = shift;
+
+    # Convert XYZ to linear RGB
+    my $rLinear =  3.2404542 * $x - 1.5371385 * $y - 0.4985314 * $z;
+    my $gLinear = -0.9692660 * $x + 1.8760108 * $y + 0.0415560 * $z;
+    my $bLinear =  0.0556434 * $x - 0.2040259 * $y + 1.0572252 * $z;
+
+    # Apply gamma correction
+    my $r = linearToSrgb($rLinear);
+    my $g = linearToSrgb($gLinear);
+    my $b = linearToSrgb($bLinear);
+
+    # Clamp to valid range
+    my %rgb;
+    $rgb{"r"} = clamp($r);
+    $rgb{"g"} = clamp($g);
+    $rgb{"b"} = clamp($b);
+
+	return %rgb;
+}
+
+sub f {
+	my $t = shift;
+	my $delta = 6.0 / 29.0;
+	if ($t > $delta ** 3) {
+        return $t ** (1.0/3.0);
+    } else {
+        return ($t / (3 * ($delta ** 2))) + (4.0 / 29.0);
+    }
+}
+
+sub xyzToLab {
+    my ($x, $y, $z) = @_;
+
+    $x = f($x / 0.95047);
+    $y = f($y / 1.00000);
+    $z = f($z / 1.08883);
+
+	my %lab;
+	$lab{"L"} = (116 * $y) - 16;
+    $lab{"a"} = 500 * ($x - $y);
+    $lab{"b"} = 200 * ($y - $z);
+
+    return %lab;
+}
+
+sub atan2Degrees {
+	my $y = shift;
+	my $x = shift;
+    my $angle = atan2($y, $x) * 180.0 / 3.1415926;
+    $angle += 360 if $angle < 0;
+	return $angle
+}
+
+# deltaE2000 algorithm
+sub diff {
+	my $lab1 = shift;
+	my $lab2 = shift;
+	die unless ref($lab1) eq "Colour" && ref($lab2) eq "Colour";
+
+	my $L1 = $lab1->{"Lab"}->{"L"};
+	my $a1 = $lab1->{"Lab"}->{"a"};
+	my $b1 = $lab1->{"Lab"}->{"b"};
+
+	my $L2 = $lab2->{"Lab"}->{"L"};
+	my $a2 = $lab2->{"Lab"}->{"a"};
+	my $b2 = $lab2->{"Lab"}->{"b"};
+
+	my $avgLp = ($L1 + $L2) / 2.0;
+
+	my $C1 = sqrt($a1 * $a1 + $b1 * $b1);
+	my $C2 = sqrt($a2 * $a2 + $b2 * $b2);
+	my $avgC = ($C1 + $C2) / 2.0;
+
+	my $G = 0.5 * (1 - sqrt(($avgC ** 7) / ($avgC ** 7 + 25.0 ** 7)));
+
+	my $a1p = (1 + $G) * $a1;
+	my $a2p = (1 + $G) * $a2;
+
+	my $C1p = sqrt($a1p * $a1p + $b1 * $b1);
+	my $C2p = sqrt($a2p * $a2p + $b2 * $b2);
+
+	my $avgCp = ($C1p + $C2p) / 2.0;
+
+	my $h1p = $C1p == 0 ? 0 : atan2Degrees($b1, $a1p);
+	my $h2p = $C2p == 0 ? 0 : atan2Degrees($b2, $a2p);
+
+	my $deltahp;
+	if ($C1p * $C2p == 0) {
+		$deltahp = 0;
+	} elsif (abs($h2p - $h1p) <= 180) {
+		$deltahp = $h2p - $h1p;
+	} elsif ($h2p <= $h1p) {
+		$deltahp = $h2p - $h1p + 360;
+	} else {
+		$deltahp = $h2p - $h1p - 360;
+	}
+
+	my $deltaLp = $L2 - $L1;
+	my $deltaCp = $C2p - $C1p;
+	my $deltaHp = 2 * sqrt($C1p * $C2p) * sin(($deltahp * 3.1415926 / 180) / 2);
+
+	my $avgHp;
+	if ($C1p * $C2p == 0) {
+		$avgHp = $h1p + $h2p;
+	} elsif (abs($h1p - $h2p) <= 180) {
+		$avgHp = ($h1p + $h2p) / 2;
+	} elsif (($h1p + $h2p) < 360) {
+		$avgHp = ($h1p + $h2p + 360) / 2;
+	} else {
+		$avgHp = ($h1p + $h2p - 360) / 2;
+	}
+
+	my $T = 1
+		- 0.17 * cos(($avgHp - 30) * 3.1415926 / 180)
+		+ 0.24 * cos((2 * $avgHp) * 3.1415926 / 180)
+		+ 0.32 * cos((3 * $avgHp + 6) * 3.1415926 / 180)
+		- 0.20 * cos((4 * $avgHp - 63) * 3.1415926 / 180);
+
+	my $deltaTheta = 30 * exp(-(($avgHp - 275) / 25) ** 2);
+	my $RC = 2 * sqrt(($avgCp ** 7) / (($avgCp ** 7) + (25.0 ** 7)));
+
+	my $SL = 1 + (0.015 * ($avgLp - 50) ** 2) / sqrt(20 + ($avgLp - 50) ** 2);
+	my $SC = 1 + 0.045 * $avgCp;
+	my $SH = 1 + 0.015 * $avgCp * $T;
+
+	my $RT = -sin(2 * $deltaTheta * 3.1415926 / 180) * $RC;
+
+	my $dE = sqrt(
+		($deltaLp / $SL) ** 2 +
+		($deltaCp / $SC) ** 2 +
+		($deltaHp / $SH) ** 2 +
+		$RT * ($deltaCp / $SC) * ($deltaHp / $SH)
+	);
+
+	return $dE;
+}
+
+sub mix {
+	my $c1 = shift;
+	my $c2 = shift;
+	die unless ref($c1) eq "Colour" && ref($c2) eq "Colour";
+
+	my $xyz1 = $c1->{"XYZ"};
+	my $xyz2 = $c2->{"XYZ"};
+
+	my $x = $xyz1->{"x"} + 0.5 * ($xyz2->{"x"} - $xyz1->{"x"});
+	my $y = $xyz1->{"y"} + 0.5 * ($xyz2->{"y"} - $xyz1->{"y"});
+	my $z = $xyz1->{"z"} + 0.5 * ($xyz2->{"z"} - $xyz1->{"z"});
+
+	my %rgb = xyzToRgb($x, $y, $z);
+
+	return Colour->new(%rgb);
+}
+
+sub find {
+	my $self = shift;
+	my $palette = shift;
+
+	# Fast check for matching RGB values
+	my $rgb1 = $self->{"RGB"};
+	foreach my $e (@{$palette}) {
+		my $rgb2 = $e->{"RGB"};
+		if ($rgb1->{"r"} == $rgb2->{"r"} &&
+			$rgb1->{"g"} == $rgb2->{"g"} &&
+			$rgb1->{"b"} == $rgb2->{"b"}) {
+			return $e;
+		}
+	}
+
+	# Slow path, use the deltaE2000 algorithm
+	my $smallestDiff;
+	my $bestEntry;
+	foreach my $entry (@{$palette}) {
+		my $thisDiff = diff($self, $entry);
+		if (!defined $smallestDiff) {
+			$bestEntry = $entry;
+			$smallestDiff = $thisDiff;
+		} elsif ($smallestDiff > $thisDiff) {
+			$bestEntry = $entry;
+			$smallestDiff = $thisDiff;
+		}
+	}
+	return $bestEntry;
+}
+
+package main;
+
+sub help {
+	print STDERR qq{Usage: $0 [-nvdi] [-help] [-verbose] files...
+-nvdi    maps the original colours to the NVDI colour palette
+-help    prints this help
+-verbose prints a little extra information for each filename
+files... a list of PNG files to convert
+};
+	exit 0;
+}
+sub usage {
+	print STDERR "Usage: $0 [-nvdi] [-help] [-verbose] files...\n";
+	exit 0;
+}
+
+my %opt = (
+	'nvdi' => 0,
+	'help' => 0,
+	'verbose' => 0,
+);
+
+while (@ARGV) {
+	my $arg = shift @ARGV;
+	if ($arg =~ m{^-nvdi$|^-remap$}) {
+		$opt{nvdi} = 1;
+	} elsif ($arg =~ m{^-h$|^-help$}) {
+		$opt{help} = 1;
+	} elsif ($arg =~ m{^-v$|^-verbose$}) {
+		$opt{verbose} = 1;
+	} else {
+		unshift @ARGV, $arg;
+		last;
 	}
 }
 
-print "OK $width x $height\n";
+help if $opt{help};
+usage unless $#ARGV == 0;
+
+my @nvdipalette;
+if ($opt{nvdi}) {
+	my @nvditriples = qw(
+		ffffff 000000 ff0000 00ff00 0000ff 1acaba ffff00 e63399
+		d9d9d9 808080 800000 008000 000080 008080 b6a139 800080
+		000033 000066 000099 0000cc 0000ff 003300 003333 003366
+		003399 0033cc 0033ff 006600 006633 006666 006699 0066cc
+		0066ff 009900 009933 009966 009999 0099cc 0099ff 00cc00
+		00cc33 00cc66 00cc99 00cccc 00ccff 00ff00 00ff33 00ff66
+		00ff99 00ffcc 00ffff 330000 330033 330066 330099 3300cc
+		3300ff 333300 333333 333366 0000c0 3333cc 3333ff 336600
+		336633 336666 336699 3366cc 3366ff 339900 339933 339966
+		339999 3399cc 3399ff 33cc00 33cc33 33cc66 33cc99 33cccc
+		33ccff 33ff00 33ff33 33ff66 33ff99 33ffcc 33ffff 660000
+		660033 660066 660099 6600cc 6600ff 663300 663333 663366
+		663399 6633cc 6633ff 666600 666633 666666 666699 6666cc
+		6666ff 669900 669933 669966 669999 6699cc 6699ff 66cc00
+		66cc33 66cc66 66cc99 66cccc 66ccff 66ff00 66ff33 66ff66
+		66ff99 66ffcc 66ffff 990000 990033 990066 990099 9900cc
+		9900ff 993300 993333 993366 993399 9933cc 9933ff 996600
+		996633 996666 996699 9966cc 9966ff 999900 999933 999966
+		999999 9999cc 9999ff 99cc00 99cc33 99cc66 99cc99 99cccc
+		99ccff 99ff00 99ff33 99ff66 99ff99 99ffcc 99ffff cc0000
+		cc0033 cc0066 cc0099 cc00cc cc00ff cc3300 cc3333 cc3366
+		cc3399 cc33cc cc33ff cc6600 cc6633 cc6666 cc6699 cc66cc
+		cc66ff cc9900 cc9933 cc9966 cc9999 cc99cc cc99ff cccc00
+		cccc33 cccc66 cccc99 cccccc ccccff ccff00 ccff33 ccff66
+		ccff99 ccffcc ccffff ff0000 ff0033 ff0066 ff0099 ff00cc
+		ff00ff ff3300 ff3333 ff3366 ff3399 ff33cc ff33ff ff6600
+		ff6633 ff6666 ff6699 ff66cc ff66ff ff9900 ff9933 ff9966
+		ff9999 ff99cc ff99ff ffcc00 ffcc33 ffcc66 ffcc99 ffcccc
+		ffccff ffff00 ffff33 ffff66 ffff99 ffffcc f30000 e60000
+		c00000 b30000 800000 4d0000 1a0000 00f300 00e600 00c000
+		00b300 008000 004d00 001a00 00001a 00004d 000080 0000b3
+		333399 0000e6 f1f1f1 e6e6e6 c0c0c0 b3b3b3 4d4d4d 000000
+	);
+	foreach (@nvditriples) {
+		push @nvdipalette, Colour->new("rgb" => $_);
+	}
+}
+
+while (@ARGV) {
+	my $filename = shift;
+	my $image = GD::Image->newFromPng($filename, 1) or die;
+
+	my ($width, $height) = $image->getBounds();
+	my $extraBits = "0" x ($width % 8);
+	my %foundPalette;
+	for my $y (0..$height-1) {
+		for my $x (0..$width-1) {
+			my $rgb = $image->getPixel($x, $y);
+			$foundPalette{$rgb} = 1;
+		}
+	}
+
+	my @palette; # of Colour objects
+	my %palette; # RGB keys, palette index values
+	my $index = 0;
+	foreach my $rgb (keys %foundPalette) {
+		my $c = Colour->new("rgb" => sprintf("%06x", $rgb));
+		$c = $c->find(\@nvdipalette) if $opt{nvdi};
+		push @palette, $c;
+		$palette{$rgb} = $index;
+		$index++;
+	}
+
+	$filename =~ s/\.png$/.img/i;
+	open IMG, ">", $filename or die;
+	print STDERR "Writing $filename\n" if $opt{verbose};
+	my $header = pack("nnnnnnnn",
+		1, #version
+		779, #header size
+		8, #planes
+		2, #pattern length
+		372, 372, # microns
+		$width, $height);
+	print IMG $header;
+	print IMG "XIMG";
+	print IMG pack("n", 0x00);
+	for my $i (0..255) {
+		if (exists $palette[$i]) {
+			my ($vdir, $vdig, $vdib) = $palette[$i]->vdi();
+			if ($opt{verbose}) {
+				print $palette[$i]->rgbhex(), " => ($vdir, $vdig, $vdib)\n";
+			}
+			print IMG pack("nnn", $vdir, $vdig, $vdib);
+		} else {
+			print IMG pack("nnn", 1000, 1000, 1000);
+		}
+	}
+
+	for my $y (0..$height-1) {
+		my @planes;
+		for my $x (0..$width-1) {
+			my $rgb = $image->getPixel($x, $y);
+			# Don't care about the RGB value, just the palette index
+			my $index = $palette{$rgb};
+			$planes[7] .= ($index & 0x80) ? "1" : "0";
+			$planes[6] .= ($index & 0x40) ? "1" : "0";
+			$planes[5] .= ($index & 0x20) ? "1" : "0";
+			$planes[4] .= ($index & 0x10) ? "1" : "0";
+			$planes[3] .= ($index & 0x08) ? "1" : "0";
+			$planes[2] .= ($index & 0x04) ? "1" : "0";
+			$planes[1] .= ($index & 0x02) ? "1" : "0";
+			$planes[0] .= ($index & 0x01) ? "1" : "0";
+		}
+		# Each plane must be an even number of bytes
+		$planes[0] .= $extraBits;
+		$planes[1] .= $extraBits;
+		$planes[2] .= $extraBits;
+		$planes[3] .= $extraBits;
+		$planes[4] .= $extraBits;
+		$planes[5] .= $extraBits;
+		$planes[6] .= $extraBits;
+		$planes[7] .= $extraBits;
+		my $bytesPerLine = length($planes[0]) / 8; # Should all be the same!
+		for my $plane (@planes) {
+			my $pos = 0;
+			my $bytes;
+			while ($pos < length($plane)) {
+				my $byte = 0;
+				$byte |= 0x80 if substr($plane, $pos + 0, 1) eq "1";
+				$byte |= 0x40 if substr($plane, $pos + 1, 1) eq "1";
+				$byte |= 0x20 if substr($plane, $pos + 2, 1) eq "1";
+				$byte |= 0x10 if substr($plane, $pos + 3, 1) eq "1";
+				$byte |= 0x08 if substr($plane, $pos + 4, 1) eq "1";
+				$byte |= 0x04 if substr($plane, $pos + 5, 1) eq "1";
+				$byte |= 0x02 if substr($plane, $pos + 6, 1) eq "1";
+				$byte |= 0x01 if substr($plane, $pos + 7, 1) eq "1";
+				$bytes .= pack("C", $byte);
+				$pos += 8;
+			}
+			print IMG pack("CC", 0x80, length($bytes)); # literal bit string
+			print IMG $bytes;
+		}
+	}
+	# Next file...
+}

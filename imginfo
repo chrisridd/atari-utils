@@ -1,4 +1,4 @@
-#!/opt/local/bin/perl5.34 -w
+#!/usr/bin/env perl -w
 
 use strict;
 

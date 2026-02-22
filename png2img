@@ -1,0 +1,103 @@
+#!/opt/local/bin/perl5.34 -w
+
+use strict;
+use warnings;
+use GD;
+
+die "Usage: $0 png-file\n" unless $#ARGV == 0;
+my $filename = shift;
+my $image = GD::Image->newFromPng($filename, 1) or die;
+
+my ($width, $height) = $image->getBounds();
+my $extraBits = "0" x ($width % 8);
+my %palette;
+for my $y (0..$height-1) {
+	for my $x (0..$width-1) {
+		my $rgb = $image->getPixel($x, $y);
+		$palette{$rgb} = 1;
+	}
+}
+my @palette;
+my $index = 0;
+for my $k (keys %palette) {
+	$palette[$index] = $k;
+	$palette{$k} = $index;
+	$index++;
+}
+
+$filename =~ s/\.png$/.img/;
+open IMG, ">", $filename or die;
+my $header = pack("nnnnnnnn",
+	1, #version
+	779, #header size
+	8, #planes
+	2, #pattern length
+	372, 372, # microns
+	$width, $height);
+print IMG $header;
+print IMG "XIMG";
+print IMG pack("n", 0x00);
+for my $i (0..255) {
+	if (exists $palette[$i]) {
+		use integer;
+		my $r = ($palette[$i] >> 16) & 0xFF;
+		my $g = ($palette[$i] >> 8) & 0xFF;
+		my $b = ($palette[$i] >> 0) & 0xFF;
+		my $vdir = ($r * 1000) / 255;
+		my $vdig = ($g * 1000) / 255;
+		my $vdib = ($b * 1000) / 255;
+		printf("%02x%02x%02x => ($vdir, $vdig, $vdib)\n", $r, $g, $b);
+		print IMG pack("nnn", $vdir, $vdig, $vdib);
+	} else {
+		print IMG pack("nnn", 1000, 1000, 1000);
+	}
+}
+
+for my $y (0..$height-1) {
+	my @planes;
+	for my $x (0..$width-1) {
+		my $rgb = $image->getPixel($x, $y);
+		my $index = $palette{$rgb};
+		# Don't care about the actual RGB value yet
+#		my ($r, $g, $b) = $image->rgb($index);
+		$planes[7] .= ($index & 0x80) ? "1" : "0";
+		$planes[6] .= ($index & 0x40) ? "1" : "0";
+		$planes[5] .= ($index & 0x20) ? "1" : "0";
+		$planes[4] .= ($index & 0x10) ? "1" : "0";
+		$planes[3] .= ($index & 0x08) ? "1" : "0";
+		$planes[2] .= ($index & 0x04) ? "1" : "0";
+		$planes[1] .= ($index & 0x02) ? "1" : "0";
+		$planes[0] .= ($index & 0x01) ? "1" : "0";
+	}
+	# Each plane must be an even number of bytes
+	$planes[0] .= $extraBits;
+	$planes[1] .= $extraBits;
+	$planes[2] .= $extraBits;
+	$planes[3] .= $extraBits;
+	$planes[4] .= $extraBits;
+	$planes[5] .= $extraBits;
+	$planes[6] .= $extraBits;
+	$planes[7] .= $extraBits;
+	my $bytesPerLine = length($planes[0]) / 8; # Should all be the same!
+	for my $plane (@planes) {
+		my $pos = 0;
+		my $bytes;
+		while ($pos < length($plane)) {
+			my $byte = 0;
+			$byte |= 0x80 if substr($plane, $pos + 0, 1) eq "1";
+			$byte |= 0x40 if substr($plane, $pos + 1, 1) eq "1";
+			$byte |= 0x20 if substr($plane, $pos + 2, 1) eq "1";
+			$byte |= 0x10 if substr($plane, $pos + 3, 1) eq "1";
+			$byte |= 0x08 if substr($plane, $pos + 4, 1) eq "1";
+			$byte |= 0x04 if substr($plane, $pos + 5, 1) eq "1";
+			$byte |= 0x02 if substr($plane, $pos + 6, 1) eq "1";
+			$byte |= 0x01 if substr($plane, $pos + 7, 1) eq "1";
+			$bytes .= pack("C", $byte);
+			$pos += 8;
+		}
+		print IMG pack("CC", 0x80, length($bytes)); # literal bit string
+		print IMG $bytes;
+	}
+}
+
+print "OK $width x $height\n";

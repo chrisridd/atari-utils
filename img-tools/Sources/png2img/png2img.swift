@@ -46,7 +46,7 @@ struct png2img {
         case none
     }
 
-    static func main() throws {
+    static func getArguments() -> (planes: Planes, remap: Remapping, filenames: [String]) {
         let args = CommandLine.arguments
         var planes = Planes.minimal
         var filenames: [String] = []
@@ -88,7 +88,6 @@ struct png2img {
                 // capture from next arg onwards
                 capturing = true
             } else if arg.hasPrefix("-") {
-                // anything else is an invalid argument
                 usage("Invalid argument \(arg)")
             } else {
                 // capture from this arg onwards
@@ -102,8 +101,12 @@ struct png2img {
         if filenames.isEmpty {
             usage("Unspecified filenames")
         }
+        return (planes: planes, remap: remap, filenames: filenames)
+    }
+
+    static func main() throws {
+        let (planes, remap, filenames) = getArguments()
         print("OK! \(filenames)")
-        print("From args \(args)")
         if planes == .minimal {
             print("Use minimal planes")
         } else {

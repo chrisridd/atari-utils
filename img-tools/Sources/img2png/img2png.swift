@@ -27,7 +27,7 @@ struct img2png {
         exit(EXIT_SUCCESS)
     }
 
-    static func main() throws {
+    static func getArguments() -> [String] {
         let args = CommandLine.arguments
         var filenames: [String] = []
         var capturing = false
@@ -57,7 +57,11 @@ struct img2png {
         if filenames.isEmpty {
             usage("Unspecified filenames")
         }
+        return filenames
+    }
+
+    static func main() throws {
+        let filenames = getArguments()
         print("OK! \(filenames)")
-        print("From args \(args)")
     }
 }

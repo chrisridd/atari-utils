@@ -29,6 +29,28 @@ public enum Palette {
     case none
     case sttt([(Int16, Int16, Int16)]) // 0-15 per channel
     case ximg([(Int16, Int16, Int16)]) // 0-1000 per channel
+
+    func getRGB(_ index: Int) -> (UInt8, UInt8, UInt8) {
+        switch self {
+        case let .sttt(xbios):
+            let r8 = (xbios[index].0 * 255) / 15;
+            let g8 = (xbios[index].1 * 255) / 15;
+            let b8 = (xbios[index].2 * 255) / 15;
+            return (UInt8(r8), UInt8(g8), UInt8(b8))
+        case let .ximg(vdi):
+            let r8 = (UInt32(vdi[index].0) * 255) / 1000;
+            let g8 = (UInt32(vdi[index].1) * 255) / 1000;
+            let b8 = (UInt32(vdi[index].2) * 255) / 1000;
+            return (UInt8(r8), UInt8(g8), UInt8(b8))
+        case .none:
+            return (0, 0, 0)
+        }
+    }
+}
+
+public enum ImageError: Error {
+    case unrecognizedPalette(String)
+    case invalidColorMode(String)
 }
 
 public struct Image {
@@ -45,7 +67,7 @@ public struct Image {
     static let signatureSTTT = "STTT".data(using: .ascii)
     static let signatureXIMG = "XIMG".data(using: .ascii)
 
-    public init(_ data: Data) {
+    public init(_ data: Data) throws {
         let pos = data.startIndex
         version = Int16(bigEndian: data[pos..<pos+2].to(type: Int16.self)!)
         headerLength = Int16(bigEndian: data[pos+2..<pos+4].to(type: Int16.self)!)
@@ -58,7 +80,6 @@ public struct Image {
         if headerLength == 8 {
             palette = .none
         } else {
-            // Should the palettes be normalized somehow, or just kept as-is like now?
             let signature = data[pos+16..<pos+20]
             if signature == Image.signatureSTTT {
                 // skip over the palette size, just read until we run out of header
@@ -74,7 +95,10 @@ public struct Image {
                 }
                 palette = .sttt(xbiosPalette)
             } else if signature == Image.signatureXIMG {
-                // Skip over a color marker word. Hope it is always 0.
+                let colorMode = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
+                if colorMode != 0 {
+                    throw ImageError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
+                }
                 var headerPos = pos + 22
                 var ximgPalette: [(Int16, Int16, Int16)] = []
                 while headerPos < headerLength * 2 {
@@ -88,7 +112,7 @@ public struct Image {
                 }
                 palette = .ximg(ximgPalette)
             } else {
-                palette = .none
+                throw ImageError.unrecognizedPalette("Palette is not XIMG or STTT")
             }
         }
         print("""

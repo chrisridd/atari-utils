@@ -69,9 +69,7 @@ struct img2png {
                 eprint("Failed to read file: \(filename)")
                 continue
             }
-            // Initialize an image object from the IMG module. Adjust the type/initializer to match the IMG API.
-            let img = IMG.Image(bytes)
-            _ = img
+            let _ = try IMG.Image(bytes)
         }
     }
 }

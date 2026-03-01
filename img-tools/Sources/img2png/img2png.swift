@@ -4,6 +4,7 @@
 
 import Foundation
 import Utils
+import IMG
 
 @main
 struct img2png {
@@ -62,6 +63,15 @@ struct img2png {
 
     static func main() throws {
         let filenames = getArguments()
-        print("OK! \(filenames)")
+        for filename in filenames {
+            let fileURL = URL(fileURLWithPath: filename)
+            guard let bytes = try? Data(contentsOf: fileURL) else {
+                eprint("Failed to read file: \(filename)")
+                continue
+            }
+            // Initialize an image object from the IMG module. Adjust the type/initializer to match the IMG API.
+            let img = IMG.Image(bytes)
+            _ = img
+        }
     }
 }

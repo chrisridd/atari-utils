@@ -51,6 +51,7 @@ public enum Palette {
 public enum ImageError: Error {
     case unrecognizedPalette(String)
     case invalidColorMode(String)
+    case badPaletteSize(String)
 }
 
 public struct Image {
@@ -82,10 +83,14 @@ public struct Image {
         } else {
             let signature = data[pos+16..<pos+20]
             if signature == Image.signatureSTTT {
-                // skip over the palette size, just read until we run out of header
+                // Next word is the palette size
+                let xbiosSize = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
+                if planes <= 8 && xbiosSize != (1 << planes) {
+                    throw ImageError.badPaletteSize("STTT palette is \(xbiosSize) and should be \(1 << planes)")
+                }
                 var headerPos = pos + 22
                 var xbiosPalette: [(Int16, Int16, Int16)] = []
-                while headerPos < headerLength * 2 {
+                while (headerPos - pos) < headerLength * 2 {
                     let xbios = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
                     let r = (xbios >> 8) & 0x0f
                     let g = (xbios >> 4) & 0x0f
@@ -93,15 +98,19 @@ public struct Image {
                     headerPos += 2
                     xbiosPalette.append((r, g, b))
                 }
+                if planes <= 8 && xbiosPalette.count != (1 << planes) {
+                    throw ImageError.badPaletteSize("STTT palette is \(xbiosPalette.count) and should be \(1 << planes)")
+                }
                 palette = .sttt(xbiosPalette)
             } else if signature == Image.signatureXIMG {
+                // Next word is the colour mode, 0 means RGB.
                 let colorMode = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
                 if colorMode != 0 {
                     throw ImageError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
                 }
                 var headerPos = pos + 22
                 var ximgPalette: [(Int16, Int16, Int16)] = []
-                while headerPos < headerLength * 2 {
+                while (headerPos - pos) < headerLength * 2 {
                     let r = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
                     headerPos += 2
                     let g = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
@@ -109,6 +118,9 @@ public struct Image {
                     let b = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
                     headerPos += 2
                     ximgPalette.append((r, g, b))
+                }
+                if planes <= 8 && ximgPalette.count != (1 << planes) {
+                    throw ImageError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
                 }
                 palette = .ximg(ximgPalette)
             } else {

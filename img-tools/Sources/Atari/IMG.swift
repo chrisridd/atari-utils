@@ -48,13 +48,13 @@ public enum Palette {
     }
 }
 
-public enum ImageError: Error {
+public enum IMGError: Error {
     case unrecognizedPalette(String)
     case invalidColorMode(String)
     case badPaletteSize(String)
 }
 
-public struct Image {
+public struct IMG {
     let version: Int16
     let headerLength: Int16
     let planes: Int16
@@ -82,11 +82,11 @@ public struct Image {
             palette = .none
         } else {
             let signature = data[pos+16..<pos+20]
-            if signature == Image.signatureSTTT {
+            if signature == IMG.signatureSTTT {
                 // Next word is the palette size
                 let xbiosSize = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
                 if planes <= 8 && xbiosSize != (1 << planes) {
-                    throw ImageError.badPaletteSize("STTT palette is \(xbiosSize) and should be \(1 << planes)")
+                    throw IMGError.badPaletteSize("STTT palette is \(xbiosSize) and should be \(1 << planes)")
                 }
                 var headerPos = pos + 22
                 var xbiosPalette: [(Int16, Int16, Int16)] = []
@@ -99,14 +99,14 @@ public struct Image {
                     xbiosPalette.append((r, g, b))
                 }
                 if planes <= 8 && xbiosPalette.count != (1 << planes) {
-                    throw ImageError.badPaletteSize("STTT palette is \(xbiosPalette.count) and should be \(1 << planes)")
+                    throw IMGError.badPaletteSize("STTT palette is \(xbiosPalette.count) and should be \(1 << planes)")
                 }
                 palette = .sttt(xbiosPalette)
-            } else if signature == Image.signatureXIMG {
+            } else if signature == IMG.signatureXIMG {
                 // Next word is the colour mode, 0 means RGB.
                 let colorMode = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
                 if colorMode != 0 {
-                    throw ImageError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
+                    throw IMGError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
                 }
                 var headerPos = pos + 22
                 var ximgPalette: [(Int16, Int16, Int16)] = []
@@ -120,11 +120,11 @@ public struct Image {
                     ximgPalette.append((r, g, b))
                 }
                 if planes <= 8 && ximgPalette.count != (1 << planes) {
-                    throw ImageError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
+                    throw IMGError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
                 }
                 palette = .ximg(ximgPalette)
             } else {
-                throw ImageError.unrecognizedPalette("Palette is not XIMG or STTT")
+                throw IMGError.unrecognizedPalette("Palette is not XIMG or STTT")
             }
         }
         print("""

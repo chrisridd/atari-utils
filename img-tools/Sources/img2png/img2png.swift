@@ -4,7 +4,7 @@
 
 import Foundation
 import Utils
-import IMG
+import Atari
 
 @main
 struct img2png {
@@ -69,7 +69,7 @@ struct img2png {
                 eprint("Failed to read file: \(filename)")
                 continue
             }
-            let _ = try IMG.Image(bytes)
+            let _ = try IMG(bytes)
         }
     }
 }

@@ -13,7 +13,7 @@ let package = Package(
         .executable(name: "png2img", targets: ["png2img"]),
         .executable(name: "img2png", targets: ["img2png"]),
         .library(name: "Utils", targets: ["Utils"]),
-        .library(name: "IMG", targets: ["IMG"]),
+        .library(name: "Atari", targets: ["Atari"]),
     ],
     dependencies: [
     ],
@@ -24,17 +24,17 @@ let package = Package(
             name: "png2img",
             dependencies: [
                 "Utils",
-                "IMG",
+                "Atari",
             ]
         ),
         .executableTarget(
             name: "img2png",
             dependencies: [
                 "Utils",
-                "IMG",
+                "Atari",
             ]
         ),
         .target(name: "Utils"),
-        .target(name: "IMG"),
+        .target(name: "Atari"),
     ]
 )

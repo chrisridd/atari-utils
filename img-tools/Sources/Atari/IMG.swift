@@ -108,17 +108,9 @@ public struct IMG {
                 if colorMode != 0 {
                     throw IMGError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
                 }
-                var headerPos = pos + 22
-                var ximgPalette: [(Int16, Int16, Int16)] = []
-                while (headerPos - pos) < headerLength * 2 {
-                    let r = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
-                    headerPos += 2
-                    let g = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
-                    headerPos += 2
-                    let b = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
-                    headerPos += 2
-                    ximgPalette.append((r, g, b))
-                }
+                var palettteStart = pos + 22
+                var paletteEnd = data.startIndex + Int(headerLength) * 2
+                let ximgPalette = try readVDIPalette(data[palettteStart..<paletteEnd])
                 if planes <= 8 && ximgPalette.count != (1 << planes) {
                     throw IMGError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
                 }

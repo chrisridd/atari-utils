@@ -27,7 +27,7 @@ extension Data {
 
 public enum Palette {
     case none
-    case sttt([(Int16, Int16, Int16)]) // 0-15 per channel
+    case sttt([(Int16, Int16, Int16)]) // 0-15 per channel, or 0-7?
     case ximg([(Int16, Int16, Int16)]) // 0-1000 per channel
 
     func getRGB(_ index: Int) -> (UInt8, UInt8, UInt8) {

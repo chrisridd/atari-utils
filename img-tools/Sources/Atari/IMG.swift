@@ -120,6 +120,27 @@ public struct IMG {
                 throw IMGError.unrecognizedPalette("Palette is not XIMG or STTT")
             }
         }
+
+        var pixelPos = data.startIndex + Int(headerLength) * 2
+        var scanlines: [[UInt32]] = []
+        var y = 0
+        while y < imageHeight {
+            var repeatCount = 1
+            if data[pixelPos] == 0x00 && data[pixelPos+1] == 0x00 && data[pixelPos+2] == 0xff {
+                // replication count
+                repeatCount = Int(data[pixelPos+3])
+                pixelPos += 4
+            }
+            var pixels: [UInt32] = Array(repeating: 0, count: Int(imageWidth))
+            for plane in 0..<planes {
+                pixelPos = IMG.decodeScanline(data[pixelPos..<data.endIndex], patternLength: patternLength, pixels: &pixels, value: 1 << plane)
+            }
+            for _ in 0..<repeatCount {
+                scanlines.append(pixels)
+            }
+            y += repeatCount
+        }
+
         print("""
             version: \(version)
             headerLength: \(headerLength) words
@@ -131,5 +152,81 @@ public struct IMG {
             imageHeight: \(imageHeight) pixels
             palette: \(palette)
             """)
+    }
+
+    static func decodeScanline(_ data: Data, patternLength: Int16, pixels: inout [UInt32], value: UInt32) -> Int {
+        var x = 0
+        var pos = data.startIndex
+        while x < pixels.count {
+            // each kind of repeat could overrun the pixels width, which is "OK". marisa.img is a good case.
+            if data[pos] == 0x80 {
+                // literal bit string
+                let count = Int(data[pos+1])
+                pos += 2
+                literalLoop: for _ in 0..<count {
+                    let byte = data[pos]
+                    pos += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x80 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x40 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x20 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x10 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x08 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x04 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x02 != 0 ? value : 0)
+                    x += 1
+                    if x == pixels.count { break literalLoop }
+                    pixels[x] += (byte & 0x01 != 0 ? value : 0)
+                    x += 1
+                }
+            } else if data[pos] == 0x00 {
+                // pattern run
+                let count = Int(data[pos+1])
+                var pattern: [UInt32] = []
+                for _ in 0..<patternLength {
+                    let byte = data[pos]
+                    pattern.append(byte & 0x80 != 0 ? value : 0)
+                    pattern.append(byte & 0x40 != 0 ? value : 0)
+                    pattern.append(byte & 0x20 != 0 ? value : 0)
+                    pattern.append(byte & 0x10 != 0 ? value : 0)
+                    pattern.append(byte & 0x08 != 0 ? value : 0)
+                    pattern.append(byte & 0x04 != 0 ? value : 0)
+                    pattern.append(byte & 0x02 != 0 ? value : 0)
+                    pattern.append(byte & 0x01 != 0 ? value : 0)
+                    pos += 1
+                }
+                patternLoop: for _ in 0..<count {
+                    for i in pattern {
+                        if x == pixels.count { break patternLoop }
+                        pixels[x] += i
+                        x += 1
+                    }
+                }
+            } else {
+                // solid run
+                let count = Int(data[pos] & 0x7f)
+                let pixel = data[pos] & 0x80 != 0 ? value : 0
+                solidLoop: for _ in 0..<count {
+                    if x == pixels.count { break solidLoop }
+                    pixels[x] += pixel
+                    x += 1
+                }
+                pos += 1
+                x += count
+            }
+        }
+        return pos
     }
 }

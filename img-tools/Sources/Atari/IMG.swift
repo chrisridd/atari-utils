@@ -88,14 +88,15 @@ public struct IMG {
                 if planes <= 8 && xbiosSize != (1 << planes) {
                     throw IMGError.badPaletteSize("STTT palette is \(xbiosSize) and should be \(1 << planes)")
                 }
-                var headerPos = pos + 22
+                var palettePos = pos + 22
+                let paletteEnd = data.startIndex + Int(headerLength) * 2
                 var xbiosPalette: [(Int16, Int16, Int16)] = []
-                while (headerPos - pos) < headerLength * 2 {
-                    let xbios = Int16(bigEndian: data[headerPos..<headerPos+2].to(type: Int16.self)!)
+                while palettePos < paletteEnd {
+                    let xbios = Int16(bigEndian: data[palettePos..<palettePos+2].to(type: Int16.self)!)
                     let r = (xbios >> 8) & 0x0f
                     let g = (xbios >> 4) & 0x0f
                     let b = (xbios >> 0) & 0x0f
-                    headerPos += 2
+                    palettePos += 2
                     xbiosPalette.append((r, g, b))
                 }
                 if planes <= 8 && xbiosPalette.count != (1 << planes) {
@@ -108,9 +109,9 @@ public struct IMG {
                 if colorMode != 0 {
                     throw IMGError.invalidColorMode("XIMG color mode \(colorMode) is not supported")
                 }
-                var palettteStart = pos + 22
-                var paletteEnd = data.startIndex + Int(headerLength) * 2
-                let ximgPalette = try readVDIPalette(data[palettteStart..<paletteEnd])
+                let paletteStart = pos + 22
+                let paletteEnd = data.startIndex + Int(headerLength) * 2
+                let ximgPalette = try readVDIPalette(data[paletteStart..<paletteEnd])
                 if planes <= 8 && ximgPalette.count != (1 << planes) {
                     throw IMGError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
                 }

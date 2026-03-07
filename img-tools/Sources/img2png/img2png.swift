@@ -63,13 +63,15 @@ struct img2png {
 
     static func main() throws {
         let filenames = getArguments()
+//        let filenames = ["/Users/cjr/Downloads/ximg/hr_giger.img"]
         for filename in filenames {
             let fileURL = URL(fileURLWithPath: filename)
             guard let bytes = try? Data(contentsOf: fileURL) else {
                 eprint("Failed to read file: \(filename)")
                 continue
             }
-            let _ = try IMG(bytes)
+            let img = try IMG(bytes)
+            let _ = try img.toPNG().write(to: URL("/tmp/foo.png")!)
         }
     }
 }

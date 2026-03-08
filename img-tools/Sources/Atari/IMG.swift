@@ -4,8 +4,6 @@
 
 import Foundation
 import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
 
 extension FixedWidthInteger {
     var dataBigEndian: Data {
@@ -140,18 +138,18 @@ public struct IMG {
         var y = 0
         while y < imageHeight {
             var repeatCount = 1
-            #if DEBUG
+            #if DEBUG_DECODE
             print("y=\(y) decoding from \(pixelPos) to \(data.endIndex)", terminator: "")
             #endif
             if data[pixelPos] == 0x00 && data[pixelPos+1] == 0x00 && data[pixelPos+2] == 0xff {
                 // replication count
                 repeatCount = Int(data[pixelPos+3])
-                #if DEBUG
+                #if DEBUG_DECODE
                 print(" repeat x\(repeatCount)", terminator: "")
                 #endif
                 pixelPos += 4
             }
-            #if DEBUG
+            #if DEBUG_DECODE
             print("")
             #endif
             var pixels: [UInt32] = Array(repeating: 0, count: Int(imageWidth))
@@ -184,68 +182,68 @@ public struct IMG {
         var pos = data.startIndex
         while x < pixels.count {
             // each kind of repeat could overrun the pixels width, which is "OK". marisa.img is a good case.
-            #if DEBUG
+            #if DEBUG_DECODE
             print("pos=\(pos) x=\(x) pixels.count=\(pixels.count)", terminator: " ")
             #endif
             if data[pos] == 0x80 {
                 // literal bit string
                 let count = Int(data[pos+1])
-                #if DEBUG
+                #if DEBUG_DECODE
                 print("literal \(count)")
                 #endif
                 pos += 2
                 var loopPos = pos
                 literalLoop: for _ in 0..<count {
                     let byte = data[loopPos]
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("literal byte \(String(byte, radix: 16, uppercase: false))")
                     #endif
                     loopPos += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x80 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x80 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x40 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x40 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x20 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x20 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x10 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x10 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x08 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x08 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x04 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x04 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x02 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x02 != 0 ? value : 0)")
                     #endif
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x01 != 0 ? value : 0)
-                    #if DEBUG
+                    #if DEBUG_DECODE
                     print("pixels[\(x)] += \(byte & 0x01 != 0 ? value : 0)")
                     #endif
                     x += 1
@@ -255,7 +253,7 @@ public struct IMG {
             } else if data[pos] == 0x00 {
                 // pattern run
                 let count = Int(data[pos+1])
-                #if DEBUG
+                #if DEBUG_DECODE
                 print("pattern \(count)")
                 #endif
                 var pattern: [UInt32] = []
@@ -282,7 +280,7 @@ public struct IMG {
             } else {
                 // solid run
                 let count = Int(data[pos] & 0x7f)
-                #if DEBUG
+                #if DEBUG_DECODE
                 print("solid \(count)")
                 #endif
                 let pixel = data[pos] & 0x80 != 0 ? value : 0
@@ -291,7 +289,7 @@ public struct IMG {
                     for _ in 0..<8 {
                         if x == pixels.count { break solidLoop }
                         pixels[x] += pixel
-                        #if DEBUG
+                        #if DEBUG_DECODE
                         print("pixels[\(x)] += \(pixel) [solid]")
                         #endif
                         x += 1
@@ -299,7 +297,7 @@ public struct IMG {
                 }
                 pos += 1
                 x = nextX
-                #if DEBUG
+                #if DEBUG_DECODE
                 print("now x=\(x) and pos=\(pos)")
                 #endif
             }
@@ -331,32 +329,11 @@ public struct IMG {
                 i += 3
             }
         }
-        let pixelData = Data(raw)
-        let provider = CGDataProvider(data: pixelData as CFData)!
-        let bitmap = CGBitmapInfo(alpha: .none, component: .integer, byteOrder: .orderDefault)
-        if let image = CGImage(width: Int(imageWidth),
-                               height: Int(imageHeight),
-                               bitsPerComponent: 8,
-                               bitsPerPixel: 24,
-                               bytesPerRow: Int(imageWidth) * 3,
-                               space: CGColorSpaceCreateDeviceRGB(),
-                               bitmapInfo: bitmap,
-                               provider: provider,
-                               decode: nil,
-                               shouldInterpolate: false,
-                               intent: .defaultIntent) {
-            // convert to PNG
-            print("Created image OK")
-            let cfdata = CFDataCreateMutable(nil, 0)!
-            if let destination = CGImageDestinationCreateWithData(cfdata, String(describing: UTType.png) as CFString, 1, nil) {
-                CGImageDestinationAddImage(destination, image, nil)
-                if CGImageDestinationFinalize(destination) {
-                    return cfdata as Data
-                }
-            }
-            throw IMGError.cannotCreatePNG("CGImageDestination creation failed")
-        }
-        print("Failed to create image")
-        throw IMGError.cannotCreatePNG("CGImage creation failed")
+
+        guard let image = CGImage.fromBytes(raw, imageWidth: Int(imageWidth), imageHeight: Int(imageHeight)) else { throw IMGError.cannotCreatePNG("Error creating CGImage") }
+
+        guard let data = image.toPNGData() else { throw IMGError.cannotCreatePNG("Error creating PNG") }
+
+        return data
     }
 }

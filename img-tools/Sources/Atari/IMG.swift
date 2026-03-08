@@ -332,7 +332,6 @@ public struct IMG {
             }
         }
         let pixelData = Data(raw)
-        // fill in pixelData!
         let provider = CGDataProvider(data: pixelData as CFData)!
         let bitmap = CGBitmapInfo(alpha: .none, component: .integer, byteOrder: .orderDefault)
         if let image = CGImage(width: Int(imageWidth),

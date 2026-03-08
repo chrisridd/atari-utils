@@ -85,6 +85,7 @@ public struct IMG {
         imageWidth = Int16(bigEndian: data[pos+12..<pos+14].to(type: Int16.self)!)
         imageHeight = Int16(bigEndian: data[pos+14..<pos+16].to(type: Int16.self)!)
         if headerLength == 8 {
+            // a bit of a hack for image generation
             if planes == 1 {
                 // fake a palette of white+black
                 palette = .mono([(UInt8(255), UInt8(255), UInt8(255)),

@@ -15,7 +15,7 @@ sub decode_scanline {
 		my ($byte0, $byte1) = unpack("x$pos" . "CC", $img);
 		if ($byte0 == 0x80) {
 			# bit string count $byte1, then that number literal bytes
-# 			print " [$pos] literal ($byte1)";
+#			print "pos=$pos x=$width pixels.count=$scanlinewidth literal $byte1\n";
 			my $offset = $pos + 2;
 			my $literal = substr($img, $offset, $byte1);
 			$plane .= $literal;
@@ -27,22 +27,23 @@ sub decode_scanline {
 			my $count = $byte1 * $patternlength;
 			my $pattern = substr($img, $offset, $patternlength);
 			$plane .= $pattern x $byte1;
-# 			print " [$pos] pattern ($count)";
+#			print "pos=$pos x=$width pixels.count=$scanlinewidth pattern $count\n";
 			$pos += 2 + $patternlength;
 			$width += $count * 8;
 		} else {
 			# solid run of black or white
 			my $count = $byte0 & 0x7f;
-# 			my $colour = $byte0 > 0x7f ? "black" : "white";
+			my $colour = $byte0 > 0x7f ? "black" : "white";
 			my $byte = $byte0 > 0x7f ? 0xFF : 0x00;
+#			print "pos=$pos x=$width pixels.count=$scanlinewidth solid $count\n";
 			$plane .= pack("C", $byte) x $count;
-# 			print " [$pos] $colour ($count)";
 			$pos += 1;
 			$width += $count * 8;
+#			print "now x=$width and pos=$pos\n"
 		}
 	}
 	push @{$planes}, $plane;
-# 	print " - total $width pixels\n";
+#	print " - total $width pixels\n";
 	return $pos;
 }
 
@@ -177,16 +178,16 @@ Color format:\t$ximgformat
 		my $scanline = 0;
 		my $repeat = 1;
 		while ($scanline < $scanlines) {
-# 			print "Reading scanline $scanline from $pos: ";
+#			print "y=$scanline decoding from $pos to " . length($img);
 			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
 			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
 				# replication count byte
 				my $offset = $pos + 3;
 				$repeat = unpack("x$offset C", $img);
-# 				print " repeat x$repeat";
+#				print " repeat x$repeat";
 				$pos += 4;
-				next;
 			}
+#			print "\n";
 			my @planes;
 			for my $plane (1..$planes) {
 				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
@@ -214,16 +215,17 @@ Color format:\t$ximgformat
 		my $scanline = 0;
 		my $repeat = 1;
 		while ($scanline < $scanlines) {
-# 			print "Reading scanline $scanline from $pos: ";
+#			print "y=$scanline decoding from $pos to " . length($img);
 			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
 			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
 				# replication count byte
 				my $offset = $pos + 3;
 				$repeat = unpack("x$offset C", $img);
-# 				print " repeat x$repeat";
+#				print " repeat x$repeat";
 				$pos += 4;
 				next;
 			}
+#			print "\n";
 			my @planes;
 			for my $plane (1..$planes) {
 				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);
@@ -259,16 +261,17 @@ Color format:\t$ximgformat
 		my $scanline = 0;
 		my $repeat = 1;
 		while ($scanline < $scanlines) {
-# 			print "Reading scanline $scanline from $pos: ";
+#			print "y=$scanline decoding from $pos to " . length($img);
 			my ($byte0, $byte1, $byte2) = unpack("x$pos" . "CCC", $img);
 			if ($byte0 == 0x00 && $byte1 == 0x00 && $byte2 == 0xFF) {
 				# replication count byte
 				my $offset = $pos + 3;
 				$repeat = unpack("x$offset C", $img);
-# 				print " repeat x$repeat";
+#				print " repeat x$repeat";
 				$pos += 4;
 				next;
 			}
+#			print "";
 			my @planes;
 			for my $plane (1..$planes) {
 				$pos = decode_scanline($pos, $scanlinewidth, $patternlength, $img, \@planes);

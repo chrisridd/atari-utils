@@ -4,6 +4,7 @@
 
 import Foundation
 import Utils
+import Atari
 
 @main
 struct png2img {
@@ -106,7 +107,6 @@ struct png2img {
 
     static func main() throws {
         let (planes, remap, filenames) = getArguments()
-        print("OK! \(filenames)")
         if planes == .minimal {
             print("Use minimal planes")
         } else {
@@ -117,6 +117,14 @@ struct png2img {
         case .gem: print("Remap to GEM")
         case .palette(let str): print("Remap to file \(str)")
         case .none: print("No remapping")
+        }
+        for filename in filenames {
+            let fileURL = URL(fileURLWithPath: filename)
+            guard let bytes = try? Data(contentsOf: fileURL) else {
+                eprint("Failed to read file: \(filename)")
+                continue
+            }
+            let _ = try IMG(pngData: bytes)
         }
     }
 }

@@ -57,6 +57,7 @@ public enum IMGError: Error {
     case invalidColorMode(String)
     case badPaletteSize(String)
     case cannotCreatePNG(String)
+    case cannotCreateImage(String)
 }
 
 public struct IMG {
@@ -69,7 +70,7 @@ public struct IMG {
     let imageWidth: Int16
     let imageHeight: Int16
     let palette: Palette
-    let rawPixels: [[UInt32]]
+    let rawPixels: [[UInt32]] // either indexes (planes <= 8) or actual RGB
 
     static let signatureSTTT = "STTT".data(using: .ascii)
     static let signatureXIMG = "XIMG".data(using: .ascii)
@@ -176,6 +177,105 @@ public struct IMG {
             imageHeight: \(imageHeight) pixels
             palette: \(palette)
             """)
+    }
+
+    public init(pngData: Data) throws {
+        version = 1
+        patternLength = 2
+        pixelWidth = 85
+        pixelHeight = 85
+
+        guard let image = CGImage.fromPNGData(pngData) else { throw IMGError.cannotCreateImage("reading PNG failed") }
+        guard let bytes = image.toBytes() else { throw IMGError.cannotCreateImage("converting to bytes") }
+        imageWidth = Int16(image.width)
+        imageHeight = Int16(image.height)
+
+        // Compute the palette
+        // need rgb -> index Dictionary
+        // need vdi array in same order
+        var scanlines: [[UInt32]] = []
+        var uniqueColours: [UInt32: UInt32] = [:]
+        var uniqueVDIPalette: [(Int16, Int16, Int16)] = []
+        var pos = 0
+        while pos < bytes.count {
+            // pos[0] = alpha (ignore)
+            let rgb =
+                UInt32(bytes[pos + 1]) << 16 |
+                UInt32(bytes[pos + 2]) << 8 |
+                UInt32(bytes[pos + 3]) << 0
+            if uniqueColours[rgb] == nil {
+                let r16 = (UInt32(bytes[pos + 1]) * 1000) / 255
+                let g16 = (UInt32(bytes[pos + 2]) * 1000) / 255
+                let b16 = (UInt32(bytes[pos + 3]) * 1000) / 255
+                uniqueColours[rgb] = UInt32(uniqueVDIPalette.count)
+                uniqueVDIPalette.append((Int16(r16), Int16(g16), Int16(b16)))
+            }
+            pos += 4
+        }
+        (planes, palette, headerLength) = IMG.buildPalette(uniqueVDIPalette)
+
+        pos = 0
+        for _ in 0..<imageHeight {
+            var scanline: [UInt32] = []
+            for _ in 0..<imageWidth {
+                let rgb =
+                    UInt32(bytes[pos + 1]) << 16 |
+                    UInt32(bytes[pos + 2]) << 8 |
+                    UInt32(bytes[pos + 3]) << 0
+                switch palette {
+                case .none:
+                    scanline.append(rgb)
+                case .ximg:
+                    scanline.append(uniqueColours[rgb]!)
+                default:
+                    throw IMGError.unrecognizedPalette("Only allowing .none and .ximg palettes for now.")
+                }
+                pos += 4
+            }
+            scanlines.append(scanline)
+        }
+        rawPixels = scanlines
+
+        print("""
+            version: \(version)
+            headerLength: \(headerLength) words
+            planes: \(planes)
+            patternLength: \(patternLength)
+            pixelWidth: \(pixelWidth) microns
+            pixelHeight: \(pixelHeight) microns
+            imageWidth: \(imageWidth) pixels
+            imageHeight: \(imageHeight) pixels
+            palette: \(palette)
+            """)
+
+    }
+
+    static func buildPalette(_ uniqueVDIPalette: [(Int16, Int16, Int16)]) -> (Int16, Palette, Int16) {
+        let planes: Int16 = switch uniqueVDIPalette.count {
+        case 32768...Int.max: 24
+        case 257...32767: 16
+        case 129...256: 8
+        case 65...128: 7
+        case 33...64: 6
+        case 17...32: 5
+        case 9...16: 4
+        case 5...8: 3
+        case 3...4: 2
+        default: 1
+        }
+
+        if planes > 8 || planes == 1 {
+            return (planes, .none, 8)
+        }
+
+        // palette should be 2**planes in size, pad if necessary
+        var vdi: [(Int16, Int16, Int16)] = uniqueVDIPalette
+        let paletteSize = 1 << planes
+        while vdi.count < paletteSize {
+            vdi.append((0, 0, 0))
+        }
+
+        return (planes, .ximg(vdi), 8 + 3 + Int16(vdi.count * 3))
     }
 
     static func decodeScanline(_ data: Data, patternLength: Int16, pixels: inout [UInt32], value: UInt32) -> Int {

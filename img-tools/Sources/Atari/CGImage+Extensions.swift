@@ -37,14 +37,16 @@ extension CGImage {
 // untested
 extension CGImage {
     public func toBytes() -> [UInt8]? {
-        var pixels = [UInt8](repeating: 0, count: self.width * self.height * 3)
+        let bytesPerRow = self.width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * self.height)
+        let bitmap = CGBitmapInfo(alpha: .noneSkipFirst, component: .integer, byteOrder: .orderDefault)
         guard let context = CGContext(data: &pixels,
                                       width: self.width,
                                       height: self.height,
                                       bitsPerComponent: 8,
-                                      bytesPerRow: self.width * 3,
+                                      bytesPerRow: bytesPerRow,
                                       space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: 0) else { return nil }
+                                      bitmapInfo: bitmap) else { return nil }
         context.draw(self, in: CGRect(x: 0, y: 0, width: self.width, height: self.height))
         return pixels
     }

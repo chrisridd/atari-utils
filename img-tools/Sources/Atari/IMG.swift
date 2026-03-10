@@ -247,7 +247,6 @@ public struct IMG {
             imageHeight: \(imageHeight) pixels
             palette: \(palette)
             """)
-
     }
 
     static func buildPalette(_ uniqueVDIPalette: [(Int16, Int16, Int16)]) -> (Int16, Palette, Int16) {
@@ -436,5 +435,39 @@ public struct IMG {
         guard let data = image.toPNGData() else { throw IMGError.cannotCreatePNG("Error creating PNG") }
 
         return data
+    }
+
+    public func toIMG() throws -> Data {
+        for scanline in rawPixels {
+            let planeline = IMG.splitScanline(scanline, planes: planes)
+            // now compress the planeLines
+        }
+        return Data()
+    }
+
+    static func splitScanline(_ scanline: [UInt32], planes: Int16) -> [[UInt8]] {
+        // split each scanline up into multiple planes
+        var planelines: [[UInt8]] = []
+        var planeMask = UInt32(1 << planes)
+        while planeMask != 0 {
+            // for each plane, set a bit for each pixel
+            var byteMask: UInt8 = 0
+            var planeBytes: [UInt8] = [ ]
+            for pixel in scanline {
+                if byteMask == 0 {
+                    // Add a new byte, and start writing from the left-most bit
+                    planeBytes.append(0)
+                    byteMask = 1 << 7
+                }
+                if pixel & planeMask != 0 {
+                    let lastIndex = planeBytes.count - 1
+                    planeBytes[lastIndex] |= byteMask
+                }
+                byteMask >>= 1
+            }
+            planelines.append(planeBytes)
+            planeMask >>= 1
+        }
+        return planelines
     }
 }

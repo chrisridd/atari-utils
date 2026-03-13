@@ -405,17 +405,6 @@ public struct IMG {
         return pos
     }
 
-    func uniquePixels() -> [UInt32: Int] {
-        var counts: [UInt32:Int] = [:]
-        for row in rawPixels {
-            for pixel in row {
-                let count = counts[pixel] ?? 0
-                counts[pixel] = count + 1
-            }
-        }
-        return counts
-    }
-
     public func toPNG() throws -> Data {
         var raw: [UInt8] = Array(repeating: 0, count: Int(imageWidth) * Int(imageHeight) * 3)
         var i = 0
@@ -438,14 +427,87 @@ public struct IMG {
     }
 
     public func toIMG() throws -> Data {
-        for scanline in rawPixels {
-            let planeline = IMG.splitScanline(scanline, planes: planes)
-            // now compress the planeLines
+        var imgData = try buildHeader()
+
+        var y = 0
+        while y < rawPixels.count {
+            let planelines = splitScanline(y)
+            let repeatCount = repeatCount(y)
+            if repeatCount != 1 {
+                imgData.append(UInt8(0x00))
+                imgData.append(UInt8(0x00))
+                imgData.append(UInt8(0xff))
+                imgData.append(UInt8(repeatCount))
+            }
+
+            for planeline in planelines {
+                imgData.append(compressPlaneline(planeline))
+            }
+
+            y += repeatCount
         }
-        return Data()
+
+        return imgData
     }
 
-    static func splitScanline(_ scanline: [UInt32], planes: Int16) -> [[UInt8]] {
+    func compressPlaneline(_ planeline: [UInt8]) -> Data {
+        var data = Data()
+        // compress here!
+        return data
+    }
+
+    func repeatCount(_ y: Int) -> Int {
+        var count = 1
+        for repeatY in (y + 1)..<rawPixels.count {
+            if rawPixels[y] == rawPixels[repeatY] {
+                count += 1
+            } else {
+                break
+            }
+        }
+        return count
+    }
+
+    func buildHeader() throws -> Data {
+        var header = Data()
+        header.append(version.dataBigEndian)
+        header.append(headerLength.dataBigEndian)
+        header.append(planes.dataBigEndian)
+        header.append(patternLength.dataBigEndian)
+        header.append(pixelWidth.dataBigEndian)
+        header.append(pixelHeight.dataBigEndian)
+        header.append(imageWidth.dataBigEndian)
+        header.append(imageHeight.dataBigEndian)
+        // this ought to be in the Palette type
+        switch palette {
+        case let .ximg(vdi):
+            header.append(IMG.signatureXIMG!)
+            header.append(UInt16(0).dataBigEndian) // 0 means RGB
+            for entry in vdi {
+                header.append(entry.0.dataBigEndian)
+                header.append(entry.1.dataBigEndian)
+                header.append(entry.2.dataBigEndian)
+            }
+            return header
+        case let .sttt(xbios):
+            header.append(IMG.signatureSTTT!)
+            header.append(Int16(xbios.count).dataBigEndian)
+            for entry in xbios {
+                let rgb: Int16 =
+                    (entry.0 << 8) & 0b1111_0000_0000 |
+                    (entry.1 << 4) & 0b0000_1111_0000 |
+                    (entry.2 << 0) & 0b0000_0000_1111
+                header.append(rgb.dataBigEndian)
+            }
+            return header
+        case .mono:
+            return header
+        case .none:
+            return header
+        }
+    }
+
+    func splitScanline(_ y: Int) -> [[UInt8]] {
         // split each scanline up into multiple planes
         var planelines: [[UInt8]] = []
         var planeMask = UInt32(1 << planes)
@@ -453,7 +515,7 @@ public struct IMG {
             // for each plane, set a bit for each pixel
             var byteMask: UInt8 = 0
             var planeBytes: [UInt8] = [ ]
-            for pixel in scanline {
+            for pixel in rawPixels[y] {
                 if byteMask == 0 {
                     // Add a new byte, and start writing from the left-most bit
                     planeBytes.append(0)

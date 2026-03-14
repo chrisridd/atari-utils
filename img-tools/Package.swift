@@ -36,5 +36,6 @@ let package = Package(
         ),
         .target(name: "Utils"),
         .target(name: "Atari"),
+        .testTarget(name: "AtariTests", dependencies: ["Atari", "Utils"]),
     ]
 )

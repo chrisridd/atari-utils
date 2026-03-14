@@ -75,6 +75,19 @@ public struct IMG {
     static let signatureSTTT = "STTT".data(using: .ascii)
     static let signatureXIMG = "XIMG".data(using: .ascii)
 
+    init(version: Int16, headerLength: Int16, planes: Int16, patternLength: Int16, pixelWidth: Int16, pixelHeight: Int16, imageWidth: Int16, imageHeight: Int16, palette: Palette, rawPixels: [[UInt32]]) {
+        self.version = version
+        self.headerLength = headerLength
+        self.planes = planes
+        self.patternLength = patternLength
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.palette = palette
+        self.rawPixels = rawPixels
+    }
+
     public init(_ data: Data) throws {
         let pos = data.startIndex
         version = Int16(bigEndian: data[pos..<pos+2].to(type: Int16.self)!)
@@ -209,8 +222,28 @@ public struct IMG {
                 let b16 = (UInt32(bytes[pos + 3]) * 1000) / 255
                 uniqueColours[rgb] = UInt32(uniqueVDIPalette.count)
                 uniqueVDIPalette.append((Int16(r16), Int16(g16), Int16(b16)))
+                print("Adding uniqueColors[\(String(format: "%06x", rgb))] - palette(\(r16), \(g16), \(b16))")
             }
             pos += 4
+        }
+        // for b/w monochrome, need to make sure the palette is in the right order so
+        // that the rawPixels make sense as-is
+        if uniqueColours.count == 2 {
+            print("monochrome palette \(uniqueVDIPalette)")
+            print("monochrome map \(uniqueColours)")
+            let entry0Black = uniqueVDIPalette[0].0 == 0 && uniqueVDIPalette[0].1 == 0 && uniqueVDIPalette[0].2 == 0
+            let entry1Black = uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].2 == 0
+            if entry0Black && !entry1Black {
+                print("black + white")
+            } else if !entry0Black && entry1Black {
+                print("white + black")
+                uniqueVDIPalette = [(Int16(0), Int16(0), Int16(0)), (Int16(1000), Int16(1000), Int16(1000))]
+                uniqueColours = [ 0xffffff: 0, 0x000000: 1]
+                print("updated palette \(uniqueVDIPalette)")
+                print("updated map \(uniqueColours)")
+            } else {
+                print("coloured")
+            }
         }
         (planes, palette, headerLength) = IMG.buildPalette(uniqueVDIPalette)
 
@@ -225,10 +258,11 @@ public struct IMG {
                 switch palette {
                 case .none:
                     scanline.append(rgb)
-                case .ximg:
+                case .ximg, .mono:
                     scanline.append(uniqueColours[rgb]!)
+//                    print("appending \(String(format: "%06x", rgb)) -> \(uniqueColours[rgb]!)")
                 default:
-                    throw IMGError.unrecognizedPalette("Only allowing .none and .ximg palettes for now.")
+                    throw IMGError.unrecognizedPalette("Only allowing TrueColour and VDI palettes for now.")
                 }
                 pos += 4
             }
@@ -263,8 +297,12 @@ public struct IMG {
         default: 1
         }
 
-        if planes > 8 || planes == 1 {
+        if planes > 8 {
             return (planes, .none, 8)
+        }
+
+        if planes == 1 {
+            return (planes, .mono([(0, 0, 0), (0xff, 0xff, 0xff)]), 8)
         }
 
         // palette should be 2**planes in size, pad if necessary
@@ -450,8 +488,19 @@ public struct IMG {
         return imgData
     }
 
+    // FIXME actually compress
     func compressPlaneline(_ planeline: [UInt8]) -> Data {
         var data = Data()
+        var start = 0
+        var remaining = planeline.count
+        while remaining > 0 {
+            let chunklen = min(remaining, 255)
+            data.append(UInt8(0x80))
+            data.append(UInt8(chunklen))
+            data.append(Data(planeline[start..<start+Int(chunklen)]))
+            start += Int(chunklen)
+            remaining -= Int(chunklen)
+        }
         // compress here!
         return data
     }
@@ -462,6 +511,10 @@ public struct IMG {
             if rawPixels[y] == rawPixels[repeatY] {
                 count += 1
             } else {
+                break
+            }
+            // The repeat count is held in one byte
+            if count == 0xff {
                 break
             }
         }
@@ -510,7 +563,7 @@ public struct IMG {
     func splitScanline(_ y: Int) -> [[UInt8]] {
         // split each scanline up into multiple planes
         var planelines: [[UInt8]] = []
-        var planeMask = UInt32(1 << planes)
+        var planeMask = UInt32(1 << planes - 1)
         while planeMask != 0 {
             // for each plane, set a bit for each pixel
             var byteMask: UInt8 = 0
@@ -527,7 +580,7 @@ public struct IMG {
                 }
                 byteMask >>= 1
             }
-            planelines.append(planeBytes)
+            planelines.insert(planeBytes, at: 0)
             planeMask >>= 1
         }
         return planelines

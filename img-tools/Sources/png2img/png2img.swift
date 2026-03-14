@@ -119,12 +119,16 @@ struct png2img {
         case .none: print("No remapping")
         }
         for filename in filenames {
-            let fileURL = URL(fileURLWithPath: filename)
-            guard let bytes = try? Data(contentsOf: fileURL) else {
+            var pngURL = URL(fileURLWithPath: filename)
+            guard let bytes = try? Data(contentsOf: pngURL) else {
                 eprint("Failed to read file: \(filename)")
                 continue
             }
-            let _ = try IMG(pngData: bytes)
+            let image = try IMG(pngData: bytes)
+//            pngURL.deletePathExtension()
+//            let imgURL = pngURL.appendingPathExtension("img")
+//            try image.toIMG().write(to: imgURL)
+            try image.toIMG().write(to: URL("foo.img")!)
         }
     }
 }

@@ -88,6 +88,122 @@ public struct IMG {
         self.rawPixels = rawPixels
     }
 
+    public init(pngData: Data) throws {
+        version = 1
+        patternLength = 2
+        pixelWidth = 85
+        pixelHeight = 85
+
+        guard let image = CGImage.fromPNGData(pngData) else { throw IMGError.cannotCreateImage("reading PNG failed") }
+        guard let bytes = image.toBytes() else { throw IMGError.cannotCreateImage("converting to bytes") }
+        imageWidth = Int16(image.width)
+        imageHeight = Int16(image.height)
+
+        // Compute the palette
+        // need rgb -> index Dictionary
+        // need vdi array in same order
+        var scanlines: [[UInt32]] = []
+        var uniqueColours: [UInt32: UInt32] = [:]
+        var uniqueVDIPalette: [(Int16, Int16, Int16)] = []
+        var pos = 0
+        while pos < bytes.count {
+            // pos[0] = alpha (ignore)
+            let rgb =
+                UInt32(bytes[pos + 1]) << 16 |
+                UInt32(bytes[pos + 2]) << 8 |
+                UInt32(bytes[pos + 3]) << 0
+            if uniqueColours[rgb] == nil {
+                let r16 = (UInt32(bytes[pos + 1]) * 1000) / 255
+                let g16 = (UInt32(bytes[pos + 2]) * 1000) / 255
+                let b16 = (UInt32(bytes[pos + 3]) * 1000) / 255
+                uniqueColours[rgb] = UInt32(uniqueVDIPalette.count)
+                uniqueVDIPalette.append((Int16(r16), Int16(g16), Int16(b16)))
+                print("Adding uniqueColors[\(String(format: "%06x", rgb))] - palette(\(r16), \(g16), \(b16))")
+            }
+            pos += 4
+        }
+        // for b/w monochrome, need to make sure the palette is in the right order so
+        // that the rawPixels make sense as-is
+        if uniqueColours.count == 2 {
+            print("monochrome palette \(uniqueVDIPalette)")
+            print("monochrome map \(uniqueColours)")
+            let entry0Black = uniqueVDIPalette[0].0 == 0 && uniqueVDIPalette[0].1 == 0 && uniqueVDIPalette[0].2 == 0
+            let entry1Black = uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].2 == 0
+            if entry0Black && !entry1Black {
+                print("black + white")
+            } else if !entry0Black && entry1Black {
+                print("white + black")
+                uniqueVDIPalette = [(Int16(0), Int16(0), Int16(0)), (Int16(1000), Int16(1000), Int16(1000))]
+                uniqueColours = [ 0xffffff: 0, 0x000000: 1]
+                print("updated palette \(uniqueVDIPalette)")
+                print("updated map \(uniqueColours)")
+            } else {
+                print("coloured")
+            }
+        }
+        (planes, palette, headerLength) = IMG.buildPalette(uniqueVDIPalette)
+
+        pos = 0
+        for _ in 0..<imageHeight {
+            var scanline: [UInt32] = []
+            for _ in 0..<imageWidth {
+                let rgb =
+                    UInt32(bytes[pos + 1]) << 16 |
+                    UInt32(bytes[pos + 2]) << 8 |
+                    UInt32(bytes[pos + 3]) << 0
+                switch palette {
+                case .none:
+                    scanline.append(rgb)
+                case .ximg, .mono:
+                    scanline.append(uniqueColours[rgb]!)
+//                    print("appending \(String(format: "%06x", rgb)) -> \(uniqueColours[rgb]!)")
+                default:
+                    throw IMGError.unrecognizedPalette("Only allowing TrueColour and VDI palettes for now.")
+                }
+                pos += 4
+            }
+            scanlines.append(scanline)
+        }
+        rawPixels = scanlines
+
+        print("""
+            version: \(version)
+            headerLength: \(headerLength) words
+            planes: \(planes)
+            patternLength: \(patternLength)
+            pixelWidth: \(pixelWidth) microns
+            pixelHeight: \(pixelHeight) microns
+            imageWidth: \(imageWidth) pixels
+            imageHeight: \(imageHeight) pixels
+            palette: \(palette)
+            """)
+    }
+
+    public func toPNG() throws -> Data {
+        var raw: [UInt8] = Array(repeating: 0, count: Int(imageWidth) * Int(imageHeight) * 3)
+        var i = 0
+        for row in rawPixels {
+            for pixel in row {
+                let index = Int(pixel & 0xFF)
+                let (r, g, b) = palette.getRGB(index)
+                raw[i + 0] = r
+                raw[i + 1] = g
+                raw[i + 2] = b
+                i += 3
+            }
+        }
+
+        guard let image = CGImage.fromBytes(raw, imageWidth: Int(imageWidth), imageHeight: Int(imageHeight)) else { throw IMGError.cannotCreatePNG("Error creating CGImage") }
+
+        guard let data = image.toPNGData() else { throw IMGError.cannotCreatePNG("Error creating PNG") }
+
+        return data
+    }
+
+}
+
+/// importing from IMG files
+extension IMG {
     public init(_ data: Data) throws {
         let pos = data.startIndex
         version = Int16(bigEndian: data[pos..<pos+2].to(type: Int16.self)!)
@@ -176,97 +292,6 @@ public struct IMG {
                 scanlines.append(pixels)
             }
             y += repeatCount
-        }
-        rawPixels = scanlines
-
-        print("""
-            version: \(version)
-            headerLength: \(headerLength) words
-            planes: \(planes)
-            patternLength: \(patternLength)
-            pixelWidth: \(pixelWidth) microns
-            pixelHeight: \(pixelHeight) microns
-            imageWidth: \(imageWidth) pixels
-            imageHeight: \(imageHeight) pixels
-            palette: \(palette)
-            """)
-    }
-
-    public init(pngData: Data) throws {
-        version = 1
-        patternLength = 2
-        pixelWidth = 85
-        pixelHeight = 85
-
-        guard let image = CGImage.fromPNGData(pngData) else { throw IMGError.cannotCreateImage("reading PNG failed") }
-        guard let bytes = image.toBytes() else { throw IMGError.cannotCreateImage("converting to bytes") }
-        imageWidth = Int16(image.width)
-        imageHeight = Int16(image.height)
-
-        // Compute the palette
-        // need rgb -> index Dictionary
-        // need vdi array in same order
-        var scanlines: [[UInt32]] = []
-        var uniqueColours: [UInt32: UInt32] = [:]
-        var uniqueVDIPalette: [(Int16, Int16, Int16)] = []
-        var pos = 0
-        while pos < bytes.count {
-            // pos[0] = alpha (ignore)
-            let rgb =
-                UInt32(bytes[pos + 1]) << 16 |
-                UInt32(bytes[pos + 2]) << 8 |
-                UInt32(bytes[pos + 3]) << 0
-            if uniqueColours[rgb] == nil {
-                let r16 = (UInt32(bytes[pos + 1]) * 1000) / 255
-                let g16 = (UInt32(bytes[pos + 2]) * 1000) / 255
-                let b16 = (UInt32(bytes[pos + 3]) * 1000) / 255
-                uniqueColours[rgb] = UInt32(uniqueVDIPalette.count)
-                uniqueVDIPalette.append((Int16(r16), Int16(g16), Int16(b16)))
-                print("Adding uniqueColors[\(String(format: "%06x", rgb))] - palette(\(r16), \(g16), \(b16))")
-            }
-            pos += 4
-        }
-        // for b/w monochrome, need to make sure the palette is in the right order so
-        // that the rawPixels make sense as-is
-        if uniqueColours.count == 2 {
-            print("monochrome palette \(uniqueVDIPalette)")
-            print("monochrome map \(uniqueColours)")
-            let entry0Black = uniqueVDIPalette[0].0 == 0 && uniqueVDIPalette[0].1 == 0 && uniqueVDIPalette[0].2 == 0
-            let entry1Black = uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].0 == 0 && uniqueVDIPalette[1].2 == 0
-            if entry0Black && !entry1Black {
-                print("black + white")
-            } else if !entry0Black && entry1Black {
-                print("white + black")
-                uniqueVDIPalette = [(Int16(0), Int16(0), Int16(0)), (Int16(1000), Int16(1000), Int16(1000))]
-                uniqueColours = [ 0xffffff: 0, 0x000000: 1]
-                print("updated palette \(uniqueVDIPalette)")
-                print("updated map \(uniqueColours)")
-            } else {
-                print("coloured")
-            }
-        }
-        (planes, palette, headerLength) = IMG.buildPalette(uniqueVDIPalette)
-
-        pos = 0
-        for _ in 0..<imageHeight {
-            var scanline: [UInt32] = []
-            for _ in 0..<imageWidth {
-                let rgb =
-                    UInt32(bytes[pos + 1]) << 16 |
-                    UInt32(bytes[pos + 2]) << 8 |
-                    UInt32(bytes[pos + 3]) << 0
-                switch palette {
-                case .none:
-                    scanline.append(rgb)
-                case .ximg, .mono:
-                    scanline.append(uniqueColours[rgb]!)
-//                    print("appending \(String(format: "%06x", rgb)) -> \(uniqueColours[rgb]!)")
-                default:
-                    throw IMGError.unrecognizedPalette("Only allowing TrueColour and VDI palettes for now.")
-                }
-                pos += 4
-            }
-            scanlines.append(scanline)
         }
         rawPixels = scanlines
 
@@ -443,27 +468,11 @@ public struct IMG {
         return pos
     }
 
-    public func toPNG() throws -> Data {
-        var raw: [UInt8] = Array(repeating: 0, count: Int(imageWidth) * Int(imageHeight) * 3)
-        var i = 0
-        for row in rawPixels {
-            for pixel in row {
-                let index = Int(pixel & 0xFF)
-                let (r, g, b) = palette.getRGB(index)
-                raw[i + 0] = r
-                raw[i + 1] = g
-                raw[i + 2] = b
-                i += 3
-            }
-        }
 
-        guard let image = CGImage.fromBytes(raw, imageWidth: Int(imageWidth), imageHeight: Int(imageHeight)) else { throw IMGError.cannotCreatePNG("Error creating CGImage") }
+}
 
-        guard let data = image.toPNGData() else { throw IMGError.cannotCreatePNG("Error creating PNG") }
-
-        return data
-    }
-
+/// exporting to IMG files
+extension IMG {
     public func toIMG() throws -> Data {
         var imgData = try buildHeader()
 
@@ -584,4 +593,5 @@ public struct IMG {
         }
         return planelines
     }
+
 }

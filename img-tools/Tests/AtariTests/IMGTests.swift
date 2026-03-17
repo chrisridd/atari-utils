@@ -52,8 +52,8 @@ func buildIMG(rawPixels: [[UInt32]], planes: Int16, palette: Palette) -> IMG {
     for p in 0..<4 {
         #expect(planes[p].count == 1)
     }
-    #expect(planes[0][0] == 0x80)
-    #expect(planes[1][0] == 0xc0)
-    #expect(planes[2][0] == 0xc0)
-    #expect(planes[3][0] == 0xc0)
+    #expect(planes[0][0] == 0x80) // 0b10_00_0000 from low-end bits
+    #expect(planes[1][0] == 0xc0) // 0b11_00_0000
+    #expect(planes[2][0] == 0xc0) // 0b11_00_0000
+    #expect(planes[3][0] == 0xc0) // 0b11_00_0000
 }

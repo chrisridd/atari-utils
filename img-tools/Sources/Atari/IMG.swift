@@ -563,8 +563,8 @@ public struct IMG {
     func splitScanline(_ y: Int) -> [[UInt8]] {
         // split each scanline up into multiple planes
         var planelines: [[UInt8]] = []
-        var planeMask = UInt32(1 << planes - 1)
-        while planeMask != 0 {
+        for plane in 0..<planes {
+            let planeMask = UInt32(1 << plane)
             // for each plane, set a bit for each pixel
             var byteMask: UInt8 = 0
             var planeBytes: [UInt8] = [ ]
@@ -580,8 +580,7 @@ public struct IMG {
                 }
                 byteMask >>= 1
             }
-            planelines.insert(planeBytes, at: 0)
-            planeMask >>= 1
+            planelines.append(planeBytes)
         }
         return planelines
     }

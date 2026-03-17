@@ -125,10 +125,9 @@ struct png2img {
                 continue
             }
             let image = try IMG(pngData: bytes)
-//            pngURL.deletePathExtension()
-//            let imgURL = pngURL.appendingPathExtension("img")
-//            try image.toIMG().write(to: imgURL)
-            try image.toIMG().write(to: URL("foo.img")!)
+            pngURL.deletePathExtension()
+            let imgURL = pngURL.appendingPathExtension("img")
+            try image.toIMG().write(to: imgURL)
         }
     }
 }

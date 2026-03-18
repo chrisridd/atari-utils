@@ -26,20 +26,25 @@ extension Data {
 }
 
 
+/// A model representing the palette present in an ```IMG``` file.
 public enum Palette {
+    /// No palette is present.
     case none
-    case sttt([(Int16, Int16, Int16)]) // 0-15 per channel, or 0-7?
-    case ximg([(Int16, Int16, Int16)]) // 0-1000 per channel
+    /// An XBIOS palette is present, as used by IMG files with the "STTT" extension.
+    case xbios([(Int16, Int16, Int16)]) // 0-15 per channel, or 0-7?
+    /// A VDI palette is present, as used by IMG files with the "XIMG" extension.
+    case vdi([(Int16, Int16, Int16)]) // 0-1000 per channel
+    /// A monochrome image is present.
     case mono([(UInt8, UInt8, UInt8)]) // 0-255 per channel
 
     func getRGB(_ index: Int) -> (UInt8, UInt8, UInt8) {
         switch self {
-        case let .sttt(xbios):
+        case let .xbios(xbios):
             let r8 = (xbios[index].0 * 255) / 15;
             let g8 = (xbios[index].1 * 255) / 15;
             let b8 = (xbios[index].2 * 255) / 15;
             return (UInt8(r8), UInt8(g8), UInt8(b8))
-        case let .ximg(vdi):
+        case let .vdi(vdi):
             let r8 = (UInt32(vdi[index].0) * 255) / 1000;
             let g8 = (UInt32(vdi[index].1) * 255) / 1000;
             let b8 = (UInt32(vdi[index].2) * 255) / 1000;
@@ -52,14 +57,31 @@ public enum Palette {
     }
 }
 
+/// Errors that can be thrown by ```IMG``` functions.
 public enum IMGError: Error {
+    /// The palette format is not recognized. Only `XIMG` and `STTT` palettes are recognized.
     case unrecognizedPalette(String)
+    /// Only palettes with RGB colours are recognized.
     case invalidColorMode(String)
+    /// The palette is encoded with the wrong size for the number of bits per pixel.
     case badPaletteSize(String)
+    /// The image could not be turned by ```CoreGraphics``` into a PNG.
     case cannotCreatePNG(String)
+    /// The IMG could not be turned into a ```CGImage```.
     case cannotCreateImage(String)
 }
 
+/// A model representing an IMG file.
+///
+/// IMG files can contain indexed colour images, which are between 1 and 8 bits per pixel. They can contain Falcon-style "HiColor" images
+/// which are 15 bits per pixel, and they can contain more standard "TrueColor" images which are 24 bits per pixel. However the most
+/// common kind is monochrome 1 bit per pixel.
+///
+/// The IMG format was originally developed by Digital Research Inc (DRI) but it has been extended in a few different ways
+/// over time by Atari application developers. The most common kinds of extension encode a colour palette, which is needed to correctly
+/// display most images between 1 and 8 bits per pixel.
+///
+/// Truly monochrome (black/white) images don't need a colour palette. By definition, HiColor and TrueColor images don't need a colour palette.
 public struct IMG {
     let version: Int16
     let headerLength: Int16
@@ -88,6 +110,9 @@ public struct IMG {
         self.rawPixels = rawPixels
     }
 
+    /// Construct an IMG instance from PNG data
+    ///
+    /// - Parameter pngData: PNG-encoded data
     public init(pngData: Data) throws {
         version = 1
         patternLength = 2
@@ -154,7 +179,7 @@ public struct IMG {
                 switch palette {
                 case .none:
                     scanline.append(rgb)
-                case .ximg, .mono:
+                case .vdi, .mono:
                     scanline.append(uniqueColours[rgb]!)
 //                    print("appending \(String(format: "%06x", rgb)) -> \(uniqueColours[rgb]!)")
                 default:
@@ -179,6 +204,9 @@ public struct IMG {
             """)
     }
 
+    /// Convert the image into a PNG
+    ///
+    /// -Returns: an encoded PNG
     public func toPNG() throws -> Data {
         var raw: [UInt8] = Array(repeating: 0, count: Int(imageWidth) * Int(imageHeight) * 3)
         var i = 0
@@ -204,6 +232,10 @@ public struct IMG {
 
 /// importing from IMG files
 extension IMG {
+    /// Create an instance from encoded IMG data
+    ///
+    /// - Parameter data: a whole IMG file
+    /// - Throws: an ``IMGError`` if the IMG file used an unknown palette
     public init(_ data: Data) throws {
         let pos = data.startIndex
         version = Int16(bigEndian: data[pos..<pos+2].to(type: Int16.self)!)
@@ -245,7 +277,7 @@ extension IMG {
                 if planes <= 8 && xbiosPalette.count != (1 << planes) {
                     throw IMGError.badPaletteSize("STTT palette is \(xbiosPalette.count) and should be \(1 << planes)")
                 }
-                palette = .sttt(xbiosPalette)
+                palette = .xbios(xbiosPalette)
             } else if signature == IMG.signatureXIMG {
                 // Next word is the colour mode, 0 means RGB.
                 let colorMode = Int16(bigEndian: data[pos+20..<pos+22].to(type: Int16.self)!)
@@ -258,7 +290,7 @@ extension IMG {
                 if planes <= 8 && ximgPalette.count != (1 << planes) {
                     throw IMGError.badPaletteSize("XIMG palette is \(ximgPalette.count) and should be \(1 << planes)")
                 }
-                palette = .ximg(ximgPalette)
+                palette = .vdi(ximgPalette)
             } else {
                 throw IMGError.unrecognizedPalette("Palette is not XIMG or STTT")
             }
@@ -308,6 +340,7 @@ extension IMG {
             """)
     }
 
+    /// Determine the number of image planes, the VDI palette, and the new header size for the encoded palette
     static func buildPalette(_ uniqueVDIPalette: [(Int16, Int16, Int16)]) -> (Int16, Palette, Int16) {
         let planes: Int16 = switch uniqueVDIPalette.count {
         case 32768...Int.max: 24
@@ -337,7 +370,7 @@ extension IMG {
             vdi.append((0, 0, 0))
         }
 
-        return (planes, .ximg(vdi), 8 + 3 + Int16(vdi.count * 3))
+        return (planes, .vdi(vdi), 8 + 3 + Int16(vdi.count * 3))
     }
 
     static func decodeScanline(_ data: Data, patternLength: Int16, pixels: inout [UInt32], value: UInt32) -> Int {
@@ -542,7 +575,7 @@ extension IMG {
         header.append(imageHeight.dataBigEndian)
         // this ought to be in the Palette type
         switch palette {
-        case let .ximg(vdi):
+        case let .vdi(vdi):
             header.append(IMG.signatureXIMG!)
             header.append(UInt16(0).dataBigEndian) // 0 means RGB
             for entry in vdi {
@@ -551,7 +584,7 @@ extension IMG {
                 header.append(entry.2.dataBigEndian)
             }
             return header
-        case let .sttt(xbios):
+        case let .xbios(xbios):
             header.append(IMG.signatureSTTT!)
             header.append(Int16(xbios.count).dataBigEndian)
             for entry in xbios {

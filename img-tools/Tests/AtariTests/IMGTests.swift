@@ -45,7 +45,7 @@ func buildIMG(rawPixels: [[UInt32]], planes: Int16, palette: Palette) -> IMG {
         (1000, 0, 1000),
         (1000, 1000, 1000)
     ]
-    let test = buildIMG(rawPixels: [rawPixels], planes: 4, palette: Palette.ximg(vdi))
+    let test = buildIMG(rawPixels: [rawPixels], planes: 4, palette: Palette.vdi(vdi))
 
     let planes = test.splitScanline(0)
     #expect(planes.count == 4)

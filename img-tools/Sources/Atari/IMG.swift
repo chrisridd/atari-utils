@@ -69,6 +69,8 @@ public enum IMGError: Error {
     case cannotCreatePNG(String)
     /// The IMG could not be turned into a ```CGImage```.
     case cannotCreateImage(String)
+    /// The data is incomplete/truncated
+    case missingData(String)
 }
 
 /// A model representing an IMG file.
@@ -204,6 +206,13 @@ public struct IMG {
             """)
     }
 
+    static func getPixelRGB(_ pixel: UInt32) -> (UInt8, UInt8, UInt8) {
+        let rchannel = (pixel >> 16) & 0xFF
+        let gchannel = (pixel >> 8) & 0xFF
+        let bchannel = (pixel >> 0) & 0xFF
+        return (UInt8(rchannel), UInt8(gchannel), UInt8(bchannel))
+    }
+
     /// Convert the image into a PNG
     ///
     /// -Returns: an encoded PNG
@@ -212,8 +221,11 @@ public struct IMG {
         var i = 0
         for row in rawPixels {
             for pixel in row {
-                let index = Int(pixel & 0xFF)
-                let (r, g, b) = palette.getRGB(index)
+                let (r, g, b) = if planes <= 8 {
+                    palette.getRGB(Int(pixel & 0xFF))
+                } else {
+                    IMG.getPixelRGB(pixel)
+                }
                 raw[i + 0] = r
                 raw[i + 1] = g
                 raw[i + 2] = b
@@ -301,24 +313,22 @@ extension IMG {
         var y = 0
         while y < imageHeight {
             var repeatCount = 1
-            #if DEBUG_DECODE
-            print("y=\(y) decoding from \(pixelPos) to \(data.endIndex)", terminator: "")
-            #endif
-            if data[pixelPos] == 0x00 && data[pixelPos+1] == 0x00 && data[pixelPos+2] == 0xff {
-                // replication count
-                repeatCount = Int(data[pixelPos+3])
-                #if DEBUG_DECODE
-                print(" repeat x\(repeatCount)", terminator: "")
-                #endif
-                pixelPos += 4
+            guard pixelPos < data.endIndex else { throw IMGError.missingData("No data for row \(y)") }
+//            print("y=\(y) decoding from \(pixelPos) to \(data.endIndex)", terminator: "")
+            if data[pixelPos] == 0x00 {
+                guard pixelPos + 2 < data.endIndex else { throw IMGError.missingData("Incomplete replication block on row \(y)") }
+                if data[pixelPos + 1] == 0x00 && data[pixelPos + 2] == 0xff {
+                    // replication count
+                    repeatCount = Int(data[pixelPos+3])
+//                    print(" repeat x\(repeatCount)", terminator: "")
+                    pixelPos += 4
+                }
             }
-            #if DEBUG_DECODE
-            print("")
-            #endif
+//            print("")
             var pixels: [UInt32] = Array(repeating: 0, count: Int(imageWidth))
             // Or `in (0..<planes).reversed()` ?
             for plane in 0..<planes {
-                pixelPos = IMG.decodeScanline(data[pixelPos..<data.endIndex], patternLength: patternLength, pixels: &pixels, value: 1 << plane)
+                pixelPos = try IMG.decodeScanline(data[pixelPos..<data.endIndex], patternLength: patternLength, pixels: &pixels, value: 1 << plane)
             }
             for _ in 0..<repeatCount {
                 scanlines.append(pixels)
@@ -373,87 +383,68 @@ extension IMG {
         return (planes, .vdi(vdi), 8 + 3 + Int16(vdi.count * 3))
     }
 
-    static func decodeScanline(_ data: Data, patternLength: Int16, pixels: inout [UInt32], value: UInt32) -> Int {
+    static func decodeScanline(_ data: Data, patternLength: Int16, pixels: inout [UInt32], value: UInt32) throws -> Int {
         var x = 0
         var pos = data.startIndex
         while x < pixels.count {
+            guard pos + 0 < data.endIndex else { throw IMGError.missingData("Row incomplete \(x) needs \(pixels.count)") }
             // each kind of repeat could overrun the pixels width, which is "OK". marisa.img is a good case.
-            #if DEBUG_DECODE
-            print("pos=\(pos) x=\(x) pixels.count=\(pixels.count)", terminator: " ")
-            #endif
+//            print("pos=\(pos) x=\(x) pixels.count=\(pixels.count) end=\(data.endIndex)", terminator: " ")
             if data[pos] == 0x80 {
                 // literal bit string
+                guard pos + 1 < data.endIndex else { throw IMGError.missingData("Literal incomplete") }
                 let count = Int(data[pos+1])
-                #if DEBUG_DECODE
-                print("literal \(count)")
-                #endif
+//                print("literal \(count)")
                 pos += 2
                 var loopPos = pos
+                guard pos + count - 1 < data.endIndex else { throw IMGError.missingData("Literal data incomplete") }
                 literalLoop: for _ in 0..<count {
                     let byte = data[loopPos]
-                    #if DEBUG_DECODE
-                    print("literal byte \(String(byte, radix: 16, uppercase: false))")
-                    #endif
+//                    print("literal byte \(String(byte, radix: 16, uppercase: false))")
                     loopPos += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x80 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x80 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x80 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x40 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x40 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x40 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x20 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x20 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x20 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x10 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x10 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x10 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x08 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x08 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x08 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x04 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x04 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x04 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x02 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x02 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x02 != 0 ? value : 0)")
                     x += 1
                     if x == pixels.count { break literalLoop }
                     pixels[x] += (byte & 0x01 != 0 ? value : 0)
-                    #if DEBUG_DECODE
-                    print("pixels[\(x)] += \(byte & 0x01 != 0 ? value : 0)")
-                    #endif
+//                    print("pixels[\(x)] += \(byte & 0x01 != 0 ? value : 0)")
                     x += 1
                 }
                 // ensure pos is correct even if we exited the loop early
                 pos += count
             } else if data[pos] == 0x00 {
                 // pattern run
+                guard pos + 1 < data.endIndex else { throw IMGError.missingData("Pattern incomplete") }
                 let count = Int(data[pos+1])
-                #if DEBUG_DECODE
-                print("pattern \(count)")
-                #endif
+//                print("pattern \(count)")
                 var pattern: [UInt32] = []
                 pos += 2
+                guard pos + 1 < data.endIndex else { throw IMGError.missingData("Pattern incomplete") }
                 for _ in 0..<patternLength {
                     let byte = data[pos]
                     pattern.append(byte & 0x80 != 0 ? value : 0)
@@ -476,32 +467,24 @@ extension IMG {
             } else {
                 // solid run
                 let count = Int(data[pos] & 0x7f)
-                #if DEBUG_DECODE
-                print("solid \(count)")
-                #endif
+//                print("solid \(count)")
                 let pixel = data[pos] & 0x80 != 0 ? value : 0
                 let nextX = x + count * 8
                 solidLoop: for _ in 0..<count {
                     for _ in 0..<8 {
                         if x == pixels.count { break solidLoop }
                         pixels[x] += pixel
-                        #if DEBUG_DECODE
-                        print("pixels[\(x)] += \(pixel) [solid]")
-                        #endif
+//                        print("pixels[\(x)] += \(pixel) [solid]")
                         x += 1
                     }
                 }
                 pos += 1
                 x = nextX
-                #if DEBUG_DECODE
-                print("now x=\(x) and pos=\(pos)")
-                #endif
+//                print("now x=\(x) and pos=\(pos)")
             }
         }
         return pos
     }
-
-
 }
 
 /// exporting to IMG files
@@ -532,19 +515,9 @@ extension IMG {
 
     // FIXME actually compress
     func compressPlaneline(_ planeline: [UInt8]) -> Data {
-        var data = Data()
-        var start = 0
-        var remaining = planeline.count
-        while remaining > 0 {
-            let chunklen = min(remaining, 255)
-            data.append(UInt8(0x80))
-            data.append(UInt8(chunklen))
-            data.append(Data(planeline[start..<start+Int(chunklen)]))
-            start += Int(chunklen)
-            remaining -= Int(chunklen)
-        }
-        // compress here!
-        return data
+        let tokens = IMG.compress(planeline)
+        let bytes = IMG.encode(tokens, input: planeline)
+        return Data(bytes)
     }
 
     func repeatCount(_ y: Int) -> Int {
@@ -626,5 +599,135 @@ extension IMG {
         }
         return planelines
     }
+}
 
+enum Token {
+    case literal(start: Int, length: Int)
+    case zeroRun(value: UInt8, length: Int)          // 0x00 or 0xFF
+    case pairRun(start: Int, length: Int)            // ABABAB...
+}
+
+extension IMG {
+    static func compress(_ input: [UInt8]) -> [Token] {
+        let n = input.count
+        if n == 0 { return [] }
+
+        var dp = Array(repeating: Int.max, count: n + 1)
+        var choice = Array<Token?>(repeating: nil, count: n)
+
+        dp[n] = 0
+
+        for i in stride(from: n - 1, through: 0, by: -1) {
+
+            var bestCost = Int.max
+            var bestToken: Token? = nil
+
+            // --------------------------------------------------
+            // 1. Literal runs (1...255)
+            // --------------------------------------------------
+//            print("Literal run from \(i)?")
+            let maxLiteral = min(255, n - i)
+            for length in 1...maxLiteral {
+                let cost = 2 + length + dp[i + length]
+                if cost < bestCost {
+                    bestCost = cost
+                    bestToken = .literal(start: i, length: length)
+                }
+            }
+
+            // --------------------------------------------------
+            // 2. 0x00 / 0xFF runs (<=127)
+            // --------------------------------------------------
+//            print("Solid run from \(i)?")
+            let byte = input[i]
+            if byte == 0x00 || byte == 0xFF {
+                var runLength = 1
+                while runLength < 127 &&
+                      i + runLength < n &&
+                      input[i + runLength] == byte {
+                    runLength += 1
+                }
+
+                let cost = 2 + dp[i + runLength]
+                if cost < bestCost {
+                    bestCost = cost
+                    bestToken = .zeroRun(value: byte, length: runLength)
+                }
+            }
+
+            // --------------------------------------------------
+            // 3. 2-byte repeating pattern (ABABAB...)
+            // --------------------------------------------------
+//            print("Pattern run from \(i)?")
+            if i + 3 < n {
+                let a = input[i]
+                let b = input[i + 1]
+
+                var runLength = 2
+                while runLength <= 255 &&
+                      i + runLength + 1 < n &&
+                      input[i + runLength] == a &&
+                      input[i + runLength + 1] == b {
+                    runLength += 2
+                }
+
+                if runLength >= 4 {
+                    let cost = 4 + dp[i + runLength]
+                    if cost < bestCost {
+                        bestCost = cost
+                        bestToken = .pairRun(start: i, length: runLength)
+                    }
+                }
+            }
+
+            dp[i] = bestCost
+            choice[i] = bestToken
+        }
+
+        // --------------------------------------------------
+        // Reconstruct optimal token sequence
+        // --------------------------------------------------
+//        print("Optimising tokens")
+        var tokens: [Token] = []
+        var index = 0
+
+        while index < n {
+            guard let token = choice[index] else { break }
+            tokens.append(token)
+
+            switch token {
+            case .literal(_, let length),
+                 .zeroRun(_, let length),
+                 .pairRun(_, let length):
+                index += length
+            }
+        }
+//        print("tokens are \(tokens)")
+        return tokens
+    }
+
+    static func encode(_ tokens: [Token], input: [UInt8]) -> [UInt8] {
+        var output: [UInt8] = []
+
+        for token in tokens {
+            switch token {
+
+            case .literal(let start, let length):
+                output.append(0x80)          // example literal marker
+                output.append(UInt8(length))
+                output.append(contentsOf: input[start..<start+length])
+
+            case .zeroRun(let value, let length):
+                output.append(UInt8(length) | (value == 0x00 ? 0x00 : 0x80))
+
+            case .pairRun(let start, let length):
+                output.append(0x00)
+                output.append(UInt8(length / 2)) // number of repeats
+                output.append(input[start])
+                output.append(input[start + 1])
+            }
+        }
+
+        return output
+    }
 }

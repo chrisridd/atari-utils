@@ -70,8 +70,12 @@ struct img2png {
                 eprint("Failed to read file: \(filename)")
                 continue
             }
-            let img = try IMG(bytes)
-            let _ = try img.toPNG().write(to: URL("/tmp/foo.png")!)
+            do {
+                let img = try IMG(bytes)
+                let _ = try img.toPNG().write(to: URL("/tmp/foo.png")!)
+            } catch {
+                eprint("\(filename): \(error)")
+            }
         }
     }
 }
